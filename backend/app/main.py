@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from backend.app.api.v1.router import api_router
 from backend.app.core.config import get_settings
@@ -17,6 +18,7 @@ async def lifespan(app: FastAPI):
     db = get_db()
     db.init_schema()
     yield
+    db.close_pool()
     cleanup_stale_exec_dirs()
 
 
@@ -30,6 +32,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    app.add_middleware(GZipMiddleware, minimum_size=500)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,

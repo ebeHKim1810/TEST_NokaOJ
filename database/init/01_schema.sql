@@ -160,10 +160,19 @@ CREATE TABLE IF NOT EXISTS contest_participants (
     PRIMARY KEY (contest_id, user_id)
 );
 
--- Contest management extensions (hide/show, old-code blocking, restricted access lists)
+-- Contest & Problem access/retention extensions
 ALTER TABLE problems ADD COLUMN IF NOT EXISTS checker_language VARCHAR(32) NOT NULL DEFAULT 'python3';
+ALTER TABLE problems ADD COLUMN IF NOT EXISTS submission_retention_mode VARCHAR(16) NOT NULL DEFAULT 'latest';
 ALTER TABLE contests ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE contests ADD COLUMN IF NOT EXISTS block_old_code BOOLEAN NOT NULL DEFAULT TRUE;
+
+CREATE TABLE IF NOT EXISTS problem_allowed_users (
+    problem_id INTEGER NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (problem_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_problem_allowed_users_user ON problem_allowed_users(user_id, problem_id);
 
 CREATE TABLE IF NOT EXISTS contest_allowed_users (
     contest_id INTEGER NOT NULL REFERENCES contests(id) ON DELETE CASCADE,

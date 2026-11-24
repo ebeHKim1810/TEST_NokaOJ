@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, Request
 
 from backend.app.core.audit import record_audit_log
+from backend.app.core.cache import app_cache, invalidate_settings_caches
 from backend.app.core.config import get_settings
 from backend.app.core.database import Database, get_db
 from backend.app.core.security import get_client_ip, require_roles
@@ -12,13 +13,16 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 
 @router.get("/public-config")
 def get_public_config(db: Database = Depends(get_db)):
-    """Centralized system branding & public settings consumed by Frontend."""
-    rows = db.fetchall("SELECT key, value FROM system_settings")
-    kv = {r["key"]: r["value"] for r in rows}
-    return {
-        "site_name": kv.get("site_name") or get_settings().app_name,
-        "allow_registration": kv.get("allow_registration", "true").lower() == "true",
-    }
+    """Centralized system branding & public settings consumed by Frontend (60s TTL cached)."""
+    def _load():
+        rows = db.fetchall("SELECT key, value FROM system_settings")
+        kv = {r["key"]: r["value"] for r in rows}
+        return {
+            "site_name": kv.get("site_name") or get_settings().app_name,
+            "allow_registration": kv.get("allow_registration", "true").lower() == "true",
+        }
+
+    return app_cache.get_or_set("public_config:global", _load, ttl_seconds=60.0)
 
 
 @router.get("/stats")
@@ -26,21 +30,30 @@ def get_system_stats(
     current_user: dict = Depends(require_roles("admin", "teacher")),
     db: Database = Depends(get_db),
 ):
-    def _cnt(sql: str) -> int:
-        r = db.fetchone(sql)
-        return int(r["cnt"]) if r else 0
+    def _load():
+        counts = db.fetchone(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM users WHERE deleted_at IS NULL) AS users_count,
+                (SELECT COUNT(*) FROM problems WHERE deleted_at IS NULL) AS problems_count,
+                (SELECT COUNT(*) FROM submissions) AS submissions_count,
+                (SELECT COUNT(*) FROM contests WHERE deleted_at IS NULL) AS contests_count,
+                (SELECT COUNT(*) FROM classrooms WHERE deleted_at IS NULL) AS classrooms_count
+            """
+        )
+        verdict_rows = db.fetchall(
+            "SELECT verdict, COUNT(*) AS cnt FROM submissions GROUP BY verdict ORDER BY cnt DESC"
+        )
+        return {
+            "users_count": int(counts["users_count"]) if counts else 0,
+            "problems_count": int(counts["problems_count"]) if counts else 0,
+            "submissions_count": int(counts["submissions_count"]) if counts else 0,
+            "contests_count": int(counts["contests_count"]) if counts else 0,
+            "classrooms_count": int(counts["classrooms_count"]) if counts else 0,
+            "verdict_breakdown": verdict_rows,
+        }
 
-    verdict_rows = db.fetchall(
-        "SELECT verdict, COUNT(*) AS cnt FROM submissions GROUP BY verdict ORDER BY cnt DESC"
-    )
-    return {
-        "users_count": _cnt("SELECT COUNT(*) AS cnt FROM users WHERE deleted_at IS NULL"),
-        "problems_count": _cnt("SELECT COUNT(*) AS cnt FROM problems WHERE deleted_at IS NULL"),
-        "submissions_count": _cnt("SELECT COUNT(*) AS cnt FROM submissions"),
-        "contests_count": _cnt("SELECT COUNT(*) AS cnt FROM contests WHERE deleted_at IS NULL"),
-        "classrooms_count": _cnt("SELECT COUNT(*) AS cnt FROM classrooms WHERE deleted_at IS NULL"),
-        "verdict_breakdown": verdict_rows,
-    }
+    return app_cache.get_or_set("admin_stats:global", _load, ttl_seconds=30.0)
 
 
 @router.get("/settings")
@@ -74,6 +87,7 @@ def update_admin_settings(
         get_client_ip(request),
         payload.settings,
     )
+    invalidate_settings_caches()
     return {"updated": True, "settings": payload.settings}
 
 

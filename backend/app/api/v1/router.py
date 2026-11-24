@@ -15,6 +15,14 @@ from backend.app.api.v1 import (
 )
 
 api_router = APIRouter(prefix="/api/v1")
+
+
+@api_router.get("/health", tags=["Health"])
+def api_health():
+    """Ultra-lightweight healthcheck & keep-alive endpoint (zero DB/R2 queries)."""
+    return {"status": "ok"}
+
+
 api_router.include_router(auth.router)
 api_router.include_router(users.router)
 api_router.include_router(problems.router)

@@ -5,8 +5,10 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from backend.app.core.audit import record_audit_log
+from backend.app.core.cache import app_cache, invalidate_submission_caches
 from backend.app.core.contest_access import ensure_contest_access, get_active_code_blocking_contests
 from backend.app.core.database import Database, get_db
+from backend.app.core.problem_access import ensure_problem_access
 from backend.app.core.queue import enqueue_submission_job, judge_execution_slot
 from backend.app.core.security import (
     get_client_ip,
@@ -17,6 +19,7 @@ from backend.app.core.security import (
 )
 from backend.app.core.storage import BaseStorage, get_storage
 from backend.app.schemas.schemas import RunSampleRequest, SubmissionCreateRequest
+from backend.app.services.submission_service import hard_delete_submission_rows
 from judge.languages.registry import list_languages
 from judge.worker.worker import JudgeEngine
 
@@ -48,6 +51,7 @@ def run_sample(
     )
     if not prob:
         raise HTTPException(status_code=404, detail="Problem not found.")
+    ensure_problem_access(db, prob, current_user)
 
     sample_in = payload.custom_input if payload.custom_input is not None else prob["sample_input"]
     expected = None if payload.custom_input is not None else prob["sample_output"]
@@ -85,6 +89,7 @@ def create_submission(
     )
     if not prob:
         raise HTTPException(status_code=404, detail="Problem not found.")
+    ensure_problem_access(db, prob, current_user, contest_id=payload.contest_id)
 
     # Validate contest window & participation when submitting to a contest
     if payload.contest_id is not None:
@@ -144,6 +149,21 @@ def create_submission(
         db, current_user["id"], "submission.create", "submission", str(sub_id), get_client_ip(request)
     )
     sub = db.fetchone("SELECT * FROM submissions WHERE id = %s", (sub_id,))
+    if not sub:
+        ephemeral = app_cache.get(f"ephemeral_sub:{sub_id}")
+        if ephemeral:
+            return dict(ephemeral)
+        return {
+            "id": sub_id,
+            "user_id": current_user["id"],
+            "problem_id": payload.problem_id,
+            "contest_id": payload.contest_id,
+            "language": payload.language,
+            "status": "COMPLETED",
+            "verdict": "PENDING",
+            "score": 0,
+            "max_score": prob["points"],
+        }
     return sub
 
 
@@ -256,10 +276,36 @@ def get_submission_detail(
         """,
         (submission_id,),
     )
-    if not sub:
-        raise HTTPException(status_code=404, detail="Submission not found.")
-
     staff = is_staff(current_user)
+    if not sub:
+        # Check ephemeral cache for a lower-scoring submission discarded by 'best' retention mode
+        ephemeral = app_cache.get(f"ephemeral_sub:{submission_id}")
+        if not ephemeral:
+            raise HTTPException(status_code=404, detail="Submission not found.")
+        if not staff and int(ephemeral["user_id"]) != int(current_user["id"]):
+            raise HTTPException(status_code=403, detail="You can only view your own submissions.")
+        sanitized_eph = []
+        for idx, r in enumerate(ephemeral.get("results", []), start=1):
+            if staff or (r.get("is_sample") and not r.get("is_hidden")):
+                sanitized_eph.append(r)
+            else:
+                sanitized_eph.append(
+                    {
+                        "id": r.get("id", idx),
+                        "testcase_index": idx,
+                        "testcase_name": f"Test #{idx}",
+                        "verdict": r["verdict"],
+                        "execution_time_ms": r["execution_time_ms"],
+                        "memory_kb": r["memory_kb"],
+                        "score": r["score"],
+                        "is_hidden": True,
+                        "checker_message": "Hidden testcase details are protected.",
+                    }
+                )
+        payload = dict(ephemeral)
+        payload["results"] = sanitized_eph
+        return payload
+
     if not staff and int(sub["user_id"]) != int(current_user["id"]):
         raise HTTPException(status_code=403, detail="You can only view your own submissions.")
 
@@ -324,3 +370,106 @@ def rejudge_submission(
     db.execute("UPDATE submissions SET status = 'PENDING', verdict = 'PENDING' WHERE id = %s", (submission_id,))
     enqueue_submission_job(submission_id, db, storage)
     return db.fetchone("SELECT * FROM submissions WHERE id = %s", (submission_id,))
+
+
+@router.delete("/{submission_id}")
+def delete_submission(
+    submission_id: int,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    storage: BaseStorage = Depends(get_storage),
+):
+    """Permanently delete a single submission from Cloudflare R2 and PostgreSQL."""
+    sub = db.fetchone(
+        "SELECT id, user_id, problem_id, source_storage_key FROM submissions WHERE id = %s",
+        (submission_id,),
+    )
+    if not sub:
+        raise HTTPException(status_code=404, detail="Submission not found.")
+
+    if not is_staff(current_user) and int(sub["user_id"]) != int(current_user["id"]):
+        raise HTTPException(status_code=403, detail="Bạn chỉ có thể xóa bài nộp của chính mình.")
+
+    hard_delete_submission_rows(db, storage, [sub])
+    record_audit_log(
+        db,
+        current_user["id"],
+        "submission.delete",
+        "submission",
+        str(submission_id),
+        get_client_ip(request),
+        {"problem_id": sub["problem_id"], "owner_user_id": sub["user_id"]},
+    )
+    invalidate_submission_caches()
+    return {"deleted": True, "id": submission_id}
+
+
+@router.delete("")
+def bulk_delete_submissions(
+    request: Request,
+    problem_id: Optional[int] = None,
+    problem_code: str = "",
+    user_id: Optional[int] = None,
+    username: str = "",
+    delete_all: bool = False,
+    current_user: dict = Depends(require_roles("admin", "teacher")),
+    db: Database = Depends(get_db),
+    storage: BaseStorage = Depends(get_storage),
+):
+    """
+    Bulk hard-delete submission history from Cloudflare R2 + PostgreSQL (Admin/Teacher only).
+    Requires at least one filter (problem_id, problem_code, user_id, username) or delete_all=true.
+    """
+    where: List[str] = []
+    params: List[Any] = []
+
+    if problem_id is not None:
+        where.append("s.problem_id = %s")
+        params.append(problem_id)
+    if problem_code.strip():
+        where.append("p.code ILIKE %s")
+        params.append(problem_code.strip())
+    if user_id is not None:
+        where.append("s.user_id = %s")
+        params.append(user_id)
+    if username.strip():
+        where.append("u.username ILIKE %s")
+        params.append(username.strip())
+
+    if not where and not delete_all:
+        raise HTTPException(
+            status_code=400,
+            detail="Vui lòng chọn điều kiện lọc (bài tập / học sinh) hoặc xác nhận delete_all=true.",
+        )
+
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    rows = db.fetchall(
+        f"""
+        SELECT s.id, s.source_storage_key
+        FROM submissions s
+        JOIN problems p ON p.id = s.problem_id
+        JOIN users u ON u.id = s.user_id
+        {where_sql}
+        """,
+        tuple(params),
+    )
+    deleted_count = hard_delete_submission_rows(db, storage, rows)
+    record_audit_log(
+        db,
+        current_user["id"],
+        "submission.bulk_delete",
+        "submission",
+        "bulk",
+        get_client_ip(request),
+        {
+            "deleted_count": deleted_count,
+            "problem_id": problem_id,
+            "problem_code": problem_code,
+            "user_id": user_id,
+            "username": username,
+            "delete_all": delete_all,
+        },
+    )
+    invalidate_submission_caches()
+    return {"deleted_count": deleted_count}

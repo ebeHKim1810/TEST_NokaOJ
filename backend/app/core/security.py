@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from backend.app.core.cache import app_cache
 from backend.app.core.config import get_settings
 from backend.app.core.database import Database, get_db
 
@@ -112,17 +113,37 @@ def get_user_roles(db: Database, user_id: int) -> List[str]:
 
 
 def load_user_by_id(db: Database, user_id: int) -> Optional[Dict[str, Any]]:
-    user = db.fetchone(
+    cache_key = f"user_auth:{user_id}"
+    cached = app_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    rows = db.fetchall(
         """
-        SELECT id, username, email, full_name, is_active, created_at
-        FROM users
-        WHERE id = %s AND deleted_at IS NULL
+        SELECT u.id, u.username, u.email, u.full_name, u.is_active, u.created_at,
+               r.name AS role_name
+        FROM users u
+        LEFT JOIN user_roles ur ON ur.user_id = u.id
+        LEFT JOIN roles r ON r.id = ur.role_id
+        WHERE u.id = %s AND u.deleted_at IS NULL
+        ORDER BY r.id ASC
         """,
         (user_id,),
     )
-    if not user or not user["is_active"]:
+    if not rows or not rows[0]["is_active"]:
         return None
-    user["roles"] = get_user_roles(db, int(user["id"]))
+    first = rows[0]
+    roles = [r["role_name"] for r in rows if r.get("role_name")]
+    user = {
+        "id": first["id"],
+        "username": first["username"],
+        "email": first["email"],
+        "full_name": first["full_name"],
+        "is_active": first["is_active"],
+        "created_at": first["created_at"],
+        "roles": roles,
+    }
+    app_cache.set(cache_key, user, ttl_seconds=30.0)
     return user
 
 

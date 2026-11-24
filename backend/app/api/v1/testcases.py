@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 from backend.app.core.audit import record_audit_log
+from backend.app.core.cache import invalidate_problem_caches
 from backend.app.core.config import get_settings
 from backend.app.core.database import Database, get_db
 from backend.app.core.security import get_client_ip, is_admin, require_roles
@@ -127,6 +128,7 @@ def create_testcase(
     record_audit_log(
         db, current_user["id"], "testcase.create", "testcase", str(tc_id), get_client_ip(request)
     )
+    invalidate_problem_caches()
     return db.fetchone("SELECT * FROM testcases WHERE id = %s", (tc_id,))
 
 
@@ -224,6 +226,7 @@ async def upload_testcases_zip(
         get_client_ip(request),
         {"imported": len(created), "warnings": len(warnings)},
     )
+    invalidate_problem_caches()
     return {
         "imported_count": len(created),
         "created": created,
@@ -270,6 +273,7 @@ def update_testcase(
     if fields:
         sets = ", ".join(f"{k} = %s" for k in fields.keys())
         db.execute(f"UPDATE testcases SET {sets} WHERE id = %s", (*fields.values(), testcase_id))
+    invalidate_problem_caches()
     return db.fetchone("SELECT * FROM testcases WHERE id = %s", (testcase_id,))
 
 
@@ -302,6 +306,7 @@ def save_all_testcases(
                 problem_id,
             ),
         )
+    invalidate_problem_caches()
     return {"saved": len(payload.items)}
 
 
@@ -324,6 +329,7 @@ def delete_testcase(
     record_audit_log(
         db, current_user["id"], "testcase.delete", "testcase", str(testcase_id), get_client_ip(request)
     )
+    invalidate_problem_caches()
     return {"deleted": True, "id": testcase_id}
 
 

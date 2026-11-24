@@ -1,7 +1,15 @@
 export type Role = 'admin' | 'teacher' | 'student';
 export type Difficulty = 'easy' | 'medium' | 'hard';
-export type Visibility = 'public' | 'private' | 'classroom';
+export type Visibility = 'public' | 'private' | 'hidden' | 'classroom';
+export type SubmissionRetentionMode = 'latest' | 'best';
 export type LanguageId = 'cpp17' | 'cpp20' | 'python3';
+
+export interface AllowedUserItem {
+  id: number;
+  username: string;
+  full_name: string;
+  email?: string;
+}
 
 export interface User {
   id: number;
@@ -23,6 +31,8 @@ export interface ProblemSummary {
   difficulty: Difficulty;
   points: number;
   visibility: Visibility;
+  submission_retention_mode?: SubmissionRetentionMode;
+  allowed_user_count?: number;
   time_limit_ms: number;
   memory_limit_mb: number;
   tags: string[];
@@ -40,9 +50,13 @@ export interface ProblemDetail extends ProblemSummary {
   sample_input: string;
   sample_output: string;
   checker_type: 'standard' | 'strict' | 'float_tol' | 'custom';
+  checker_language?: 'python3' | 'cpp17' | 'cpp20';
+  checker_source?: string;
   testcase_count: number;
   samples: Array<{ id: number; name: string; input: string; output: string }>;
   recent_submissions: SubmissionSummary[];
+  allowed_users?: AllowedUserItem[];
+  allowed_user_ids?: number[];
   block_old_code?: boolean;
 }
 

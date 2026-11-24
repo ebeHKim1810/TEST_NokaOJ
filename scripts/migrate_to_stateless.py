@@ -31,6 +31,7 @@ TABLE_COPY_ORDER: List[str] = [
     "tags",
     "problems",
     "problem_tags",
+    "problem_allowed_users",
     "testcase_groups",
     "testcases",
     "classrooms",

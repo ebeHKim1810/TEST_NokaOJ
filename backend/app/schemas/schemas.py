@@ -45,7 +45,9 @@ class ProblemCreateRequest(BaseModel):
     memory_limit_mb: int = Field(256, ge=16, le=2048)
     points: int = Field(100, ge=1, le=10000)
     difficulty: Literal["easy", "medium", "hard"] = "easy"
-    visibility: Literal["public", "private", "classroom"] = "public"
+    visibility: Literal["public", "private", "hidden", "classroom"] = "public"
+    submission_retention_mode: Literal["latest", "best"] = "latest"
+    allowed_user_ids: List[int] = Field(default_factory=list)
     checker_type: Literal["standard", "strict", "float_tol", "custom"] = "standard"
     checker_language: Literal["python3", "cpp17", "cpp20"] = "python3"
     checker_source: Optional[str] = None
@@ -64,11 +66,19 @@ class ProblemUpdateRequest(BaseModel):
     memory_limit_mb: Optional[int] = Field(None, ge=16, le=2048)
     points: Optional[int] = Field(None, ge=1, le=10000)
     difficulty: Optional[Literal["easy", "medium", "hard"]] = None
-    visibility: Optional[Literal["public", "private", "classroom"]] = None
+    visibility: Optional[Literal["public", "private", "hidden", "classroom"]] = None
+    submission_retention_mode: Optional[Literal["latest", "best"]] = None
+    allowed_user_ids: Optional[List[int]] = None
     checker_type: Optional[Literal["standard", "strict", "float_tol", "custom"]] = None
     checker_language: Optional[Literal["python3", "cpp17", "cpp20"]] = None
     checker_source: Optional[str] = None
     tags: Optional[List[str]] = None
+
+
+class ProblemAccessUpdateRequest(BaseModel):
+    visibility: Optional[Literal["public", "private", "hidden", "classroom"]] = None
+    allowed_user_ids: Optional[List[int]] = None
+    submission_retention_mode: Optional[Literal["latest", "best"]] = None
 
 
 # --- Testcases ---

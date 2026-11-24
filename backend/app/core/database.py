@@ -7,10 +7,13 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, TypeVar
 
 from backend.app.core.config import get_settings
+
+T = TypeVar("T")
 
 
 SQLITE_SCHEMA_SQL = """
@@ -64,6 +67,7 @@ CREATE TABLE IF NOT EXISTS problems (
     points INTEGER NOT NULL DEFAULT 100,
     difficulty VARCHAR(16) NOT NULL DEFAULT 'easy',
     visibility VARCHAR(16) NOT NULL DEFAULT 'public',
+    submission_retention_mode VARCHAR(16) NOT NULL DEFAULT 'latest',
     checker_type VARCHAR(32) NOT NULL DEFAULT 'standard',
     checker_storage_key TEXT NULL,
     created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -76,6 +80,13 @@ CREATE TABLE IF NOT EXISTS problem_tags (
     problem_id INTEGER NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
     PRIMARY KEY (problem_id, tag_id)
+);
+
+CREATE TABLE IF NOT EXISTS problem_allowed_users (
+    problem_id INTEGER NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (problem_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS testcase_groups (
@@ -276,13 +287,97 @@ class Database:
         self.database_url = normalized
         self.is_postgres = normalized.startswith("postgres")
         self._lock = threading.RLock()
+        self._pg_pool: Any = None
+        self._conn_created_at: Dict[int, float] = {}
+        self._conn_last_used_at: Dict[int, float] = {}
+        self._pool_recycle_sec = int(os.getenv("DB_POOL_RECYCLE_SECONDS", "240"))
+        self._pool_min_conn = max(1, int(os.getenv("DB_POOL_MIN_SIZE", "1")))
+        self._pool_max_conn = max(self._pool_min_conn, int(os.getenv("DB_POOL_MAX_SIZE", "8")))
         if not self.is_postgres:
-            db_path = database_url.replace("sqlite:///", "", 1)
+            db_path = normalized.replace("sqlite:///", "", 1)
             if db_path != ":memory:":
                 os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
             self._sqlite_path = db_path
         else:
             self._sqlite_path = ""
+
+    def _get_pg_pool(self) -> Any:
+        if self._pg_pool is not None:
+            return self._pg_pool
+        with self._lock:
+            if self._pg_pool is None:
+                import psycopg2.pool  # type: ignore
+
+                connect_kwargs: Dict[str, Any] = {
+                    "keepalives": 1,
+                    "keepalives_idle": 30,
+                    "keepalives_interval": 10,
+                    "keepalives_count": 3,
+                }
+                if "connect_timeout=" not in self.database_url:
+                    connect_kwargs["connect_timeout"] = 15
+                self._pg_pool = psycopg2.pool.ThreadedConnectionPool(
+                    self._pool_min_conn,
+                    self._pool_max_conn,
+                    dsn=self.database_url,
+                    **connect_kwargs,
+                )
+            return self._pg_pool
+
+    def _checkout_pg_conn(self) -> Any:
+        pool = self._get_pg_pool()
+        now = time.monotonic()
+        for _ in range(3):
+            conn = pool.getconn()
+            cid = id(conn)
+            created_at = self._conn_created_at.get(cid)
+            if created_at is None:
+                self._conn_created_at[cid] = now
+                created_at = now
+            last_used = self._conn_last_used_at.get(cid, created_at)
+
+            # Recycle closed connections or connections older than pool_recycle (240s for Neon)
+            if conn.closed != 0 or (now - created_at) >= self._pool_recycle_sec:
+                self._conn_created_at.pop(cid, None)
+                self._conn_last_used_at.pop(cid, None)
+                try:
+                    pool.putconn(conn, close=True)
+                except Exception:
+                    pass
+                continue
+
+            # Pre-ping idle connections (idle > 20s) to gracefully handle Neon scale-to-zero
+            if (now - last_used) >= 20.0:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+                    conn.rollback()
+                except Exception:
+                    self._conn_created_at.pop(cid, None)
+                    self._conn_last_used_at.pop(cid, None)
+                    try:
+                        pool.putconn(conn, close=True)
+                    except Exception:
+                        pass
+                    continue
+
+            return conn
+
+        # Fallback: obtain a fresh connection directly via pool
+        conn = pool.getconn()
+        self._conn_created_at[id(conn)] = now
+        return conn
+
+    def close_pool(self) -> None:
+        with self._lock:
+            if self._pg_pool is not None:
+                try:
+                    self._pg_pool.closeall()
+                except Exception:
+                    pass
+                self._pg_pool = None
+                self._conn_created_at.clear()
+                self._conn_last_used_at.clear()
 
     def _adapt_query(self, sql: str) -> str:
         if self.is_postgres:
@@ -295,21 +390,32 @@ class Database:
     @contextmanager
     def connection(self) -> Iterator[Any]:
         if self.is_postgres:
-            import psycopg2  # type: ignore
-            import psycopg2.extras  # type: ignore
-
-            connect_kwargs: Dict[str, Any] = {}
-            if "connect_timeout=" not in self.database_url:
-                connect_kwargs["connect_timeout"] = 15
-            conn = psycopg2.connect(self.database_url, **connect_kwargs)
+            pool = self._get_pg_pool()
+            conn = self._checkout_pg_conn()
+            broken = False
             try:
                 yield conn
                 conn.commit()
-            except Exception:
-                conn.rollback()
+                self._conn_last_used_at[id(conn)] = time.monotonic()
+            except Exception as exc:
+                import psycopg2  # type: ignore
+
+                if isinstance(exc, (psycopg2.OperationalError, psycopg2.InterfaceError)) or conn.closed != 0:
+                    broken = True
+                else:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        broken = True
                 raise
             finally:
-                conn.close()
+                if broken:
+                    self._conn_created_at.pop(id(conn), None)
+                    self._conn_last_used_at.pop(id(conn), None)
+                try:
+                    pool.putconn(conn, close=broken)
+                except Exception:
+                    pass
         else:
             with self._lock:
                 conn = sqlite3.connect(self._sqlite_path, check_same_thread=False)
@@ -323,6 +429,16 @@ class Database:
                     raise
                 finally:
                     conn.close()
+
+    def _run_with_pg_retry(self, fn: Callable[[], T]) -> T:
+        if not self.is_postgres:
+            return fn()
+        import psycopg2  # type: ignore
+
+        try:
+            return fn()
+        except (psycopg2.OperationalError, psycopg2.InterfaceError):
+            return fn()
 
     def init_schema(self) -> None:
         if self.is_postgres:
@@ -342,6 +458,8 @@ class Database:
                 p_cols = {row[1] for row in conn.execute("PRAGMA table_info(problems)").fetchall()}
                 if "checker_language" not in p_cols:
                     conn.execute("ALTER TABLE problems ADD COLUMN checker_language VARCHAR(32) NOT NULL DEFAULT 'python3'")
+                if "submission_retention_mode" not in p_cols:
+                    conn.execute("ALTER TABLE problems ADD COLUMN submission_retention_mode VARCHAR(16) NOT NULL DEFAULT 'latest'")
                 cols = {row[1] for row in conn.execute("PRAGMA table_info(contests)").fetchall()}
                 if "is_hidden" not in cols:
                     conn.execute("ALTER TABLE contests ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT 0")
@@ -350,58 +468,73 @@ class Database:
 
     def fetchone(self, sql: str, params: Sequence[Any] = ()) -> Optional[Dict[str, Any]]:
         q = self._adapt_query(sql)
-        with self.connection() as conn:
-            if self.is_postgres:
-                import psycopg2.extras  # type: ignore
 
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute(q, params)
+        def _op() -> Optional[Dict[str, Any]]:
+            with self.connection() as conn:
+                if self.is_postgres:
+                    import psycopg2.extras  # type: ignore
+
+                    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                        cur.execute(q, params)
+                        row = cur.fetchone()
+                        return dict(row) if row is not None else None
+                else:
+                    cur = conn.execute(q, params)
                     row = cur.fetchone()
                     return dict(row) if row is not None else None
-            else:
-                cur = conn.execute(q, params)
-                row = cur.fetchone()
-                return dict(row) if row is not None else None
+
+        return self._run_with_pg_retry(_op)
 
     def fetchall(self, sql: str, params: Sequence[Any] = ()) -> List[Dict[str, Any]]:
         q = self._adapt_query(sql)
-        with self.connection() as conn:
-            if self.is_postgres:
-                import psycopg2.extras  # type: ignore
 
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute(q, params)
+        def _op() -> List[Dict[str, Any]]:
+            with self.connection() as conn:
+                if self.is_postgres:
+                    import psycopg2.extras  # type: ignore
+
+                    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                        cur.execute(q, params)
+                        return [dict(r) for r in cur.fetchall()]
+                else:
+                    cur = conn.execute(q, params)
                     return [dict(r) for r in cur.fetchall()]
-            else:
-                cur = conn.execute(q, params)
-                return [dict(r) for r in cur.fetchall()]
+
+        return self._run_with_pg_retry(_op)
 
     def execute(self, sql: str, params: Sequence[Any] = ()) -> int:
         q = self._adapt_query(sql)
-        with self.connection() as conn:
-            if self.is_postgres:
-                with conn.cursor() as cur:
-                    cur.execute(q, params)
+
+        def _op() -> int:
+            with self.connection() as conn:
+                if self.is_postgres:
+                    with conn.cursor() as cur:
+                        cur.execute(q, params)
+                        return cur.rowcount
+                else:
+                    cur = conn.execute(q, params)
                     return cur.rowcount
-            else:
-                cur = conn.execute(q, params)
-                return cur.rowcount
+
+        return self._run_with_pg_retry(_op)
 
     def insert_returning_id(self, sql: str, params: Sequence[Any] = ()) -> int:
-        with self.connection() as conn:
-            if self.is_postgres:
-                q = sql.rstrip().rstrip(";")
-                if "RETURNING" not in q.upper():
-                    q += " RETURNING id"
-                with conn.cursor() as cur:
-                    cur.execute(q, params)
-                    row = cur.fetchone()
-                    return int(row[0])
-            else:
-                q = self._adapt_query(sql)
-                q = re.sub(r"\s+RETURNING\s+id\s*$", "", q, flags=re.IGNORECASE)
-                cur = conn.execute(q, params)
-                return int(cur.lastrowid)
+        def _op() -> int:
+            with self.connection() as conn:
+                if self.is_postgres:
+                    q = sql.rstrip().rstrip(";")
+                    if "RETURNING" not in q.upper():
+                        q += " RETURNING id"
+                    with conn.cursor() as cur:
+                        cur.execute(q, params)
+                        row = cur.fetchone()
+                        return int(row[0])
+                else:
+                    q = self._adapt_query(sql)
+                    q = re.sub(r"\s+RETURNING\s+id\s*$", "", q, flags=re.IGNORECASE)
+                    cur = conn.execute(q, params)
+                    return int(cur.lastrowid)
+
+        return self._run_with_pg_retry(_op)
 
 
 _db_instance: Optional[Database] = None

@@ -7,25 +7,33 @@ import { DifficultyBadge } from '../components/StatusBadge';
 import { ContestItem, ProblemSummary } from '../types';
 
 export const HomePage: React.FC = () => {
-  const { user, siteName } = useApp();
+  const { user, loadingAuth, siteName } = useApp();
   const [problems, setProblems] = useState<ProblemSummary[]>([]);
   const [contests, setContests] = useState<ContestItem[]>([]);
   const [assignments, setAssignments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (loadingAuth) return;
+    let active = true;
     Promise.all([
       api.listProblems({ page: 1, page_size: 10, sort_by: 'code', sort_dir: 'desc' }),
       api.listContests(),
       user ? api.myAssignments().catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
     ])
       .then(([pRes, cRes, aRes]) => {
+        if (!active) return;
         setProblems(pRes.items || []);
         setContests((cRes.items || []).filter((c: ContestItem) => c.status !== 'ENDED').slice(0, 4));
         setAssignments((aRes.items || []).slice(0, 5));
       })
-      .finally(() => setLoading(false));
-  }, [user]);
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [user, loadingAuth]);
 
   return (
     <div className="space-y-6">
@@ -182,6 +190,7 @@ export const HomePage: React.FC = () => {
                     <td>
                       <Link
                         to={`/problems/${p.code}`}
+                        onMouseEnter={() => api.prefetchProblem(p.code)}
                         className="font-medium text-zinc-900 dark:text-zinc-100 hover:text-[#2A5C99] dark:hover:text-[#89B4E8]"
                       >
                         {p.title}

@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Eye, Save, Upload, Download, Trash2, Plus, Sparkles, Code2 } from 'lucide-react';
+import { Eye, Save, Upload, Download, Trash2, Plus, Sparkles, Code2, Shield, HardDrive } from 'lucide-react';
 import { api } from '../services/api';
 import { useApp } from '../stores/AppContext';
 import { MarkdownLatex } from '../components/MarkdownLatex';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ProblemAccessPicker } from '../components/ProblemAccessPicker';
 import { TestcaseGeneratorPanel } from '../features/testcase-generator/TestcaseGeneratorPanel';
-import { TestcaseGroup, TestcaseItem } from '../types';
+import { AllowedUserItem, SubmissionRetentionMode, TestcaseGroup, TestcaseItem, Visibility } from '../types';
 
 const CHECKER_TEMPLATES: Record<'python3' | 'cpp17' | 'cpp20', string> = {
   python3: `import sys
@@ -83,12 +84,14 @@ export const AdminProblemManagerPage: React.FC = () => {
     memory_limit_mb: 256,
     points: 100,
     difficulty: 'easy',
-    visibility: 'public',
+    visibility: 'public' as Visibility,
+    submission_retention_mode: 'latest' as SubmissionRetentionMode,
     checker_type: 'standard',
     checker_language: 'python3' as 'python3' | 'cpp17' | 'cpp20',
     checker_source: '',
     tags: '',
   });
+  const [allowedUsers, setAllowedUsers] = useState<AllowedUserItem[]>([]);
 
   // Testcase states
   const [testcases, setTestcases] = useState<TestcaseItem[]>([]);
@@ -123,12 +126,14 @@ export const AdminProblemManagerPage: React.FC = () => {
           memory_limit_mb: p.memory_limit_mb || 256,
           points: p.points || 100,
           difficulty: p.difficulty || 'easy',
-          visibility: p.visibility || 'public',
+          visibility: (p.visibility || 'public') as Visibility,
+          submission_retention_mode: (p.submission_retention_mode || 'latest') as SubmissionRetentionMode,
           checker_type: p.checker_type || 'standard',
           checker_language: (p.checker_language || 'python3') as 'python3' | 'cpp17' | 'cpp20',
           checker_source: p.checker_source || '',
           tags: (p.tags || []).join(', '),
         });
+        setAllowedUsers(p.allowed_users || []);
         loadTestcases(p.id);
       });
     }
@@ -147,6 +152,7 @@ export const AdminProblemManagerPage: React.FC = () => {
         time_limit_ms: Number(form.time_limit_ms),
         memory_limit_mb: Number(form.memory_limit_mb),
         points: Number(form.points),
+        allowed_user_ids: allowedUsers.map((u) => u.id),
         checker_source: form.checker_type === 'custom' ? form.checker_source : undefined,
         tags: form.tags.split(',').map((t) => t.trim()).filter(Boolean),
       };
@@ -286,7 +292,7 @@ export const AdminProblemManagerPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             <div>
               <label className="block text-xs font-medium text-zinc-500 mb-1">Time Limit (ms)</label>
               <input type="number" value={form.time_limit_ms} onChange={(e) => setForm({ ...form, time_limit_ms: Number(e.target.value) })} className="noka-input font-mono" />
@@ -308,16 +314,70 @@ export const AdminProblemManagerPage: React.FC = () => {
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-zinc-500 mb-1">Hiển thị</label>
-              <select value={form.visibility} onChange={(e) => setForm({ ...form, visibility: e.target.value })} className="noka-input">
-                <option value="public">Public</option>
-                <option value="private">Private</option>
-                <option value="classroom">Classroom</option>
-              </select>
-            </div>
-            <div>
               <label className="block text-xs font-medium text-zinc-500 mb-1">Tags (dấu phẩy)</label>
               <input value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="math, dp" className="noka-input" />
+            </div>
+          </div>
+
+          {/* Visibility & Allowed Students */}
+          <div className="noka-section p-4 space-y-3">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+              <Shield className="h-4 w-4 text-[#2A5C99] dark:text-[#89B4E8]" />
+              Chế độ hiển thị & Phân quyền bài tập
+            </div>
+            <ProblemAccessPicker
+              visibility={form.visibility}
+              allowedUsers={allowedUsers}
+              onVisibilityChange={(next) => setForm({ ...form, visibility: next })}
+              onAllowedUsersChange={setAllowedUsers}
+            />
+          </div>
+
+          {/* Submission Retention Policy */}
+          <div className="noka-section p-4 space-y-3">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+              <HardDrive className="h-4 w-4 text-[#2A5C99] dark:text-[#89B4E8]" />
+              Chế độ lưu bài nộp của học sinh (Tối ưu dung lượng DB & R2)
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              {[
+                {
+                  id: 'latest' as SubmissionRetentionMode,
+                  title: 'Lưu lần nộp cuối cùng',
+                  desc: 'Ghi đè mỗi lần học sinh nộp lại — tự động xóa bài nộp và file code cũ trên Neon DB & Cloudflare R2.',
+                },
+                {
+                  id: 'best' as SubmissionRetentionMode,
+                  title: 'Lưu lần có điểm cao nhất',
+                  desc: 'Chỉ ghi đè khi đạt điểm cao hơn hoặc bằng lần trước; lần nộp điểm thấp hơn chỉ hiển thị kết quả rồi tự dọn.',
+                },
+              ].map((opt) => {
+                const active = form.submission_retention_mode === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setForm({ ...form, submission_retention_mode: opt.id })}
+                    className={`rounded-md border p-3 text-left transition-colors ${
+                      active
+                        ? 'border-[#2A5C99] bg-[#2A5C99]/[0.07] dark:border-[#89B4E8] dark:bg-[#89B4E8]/15'
+                        : 'border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/60'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`h-3.5 w-3.5 rounded-full border-2 flex items-center justify-center ${
+                          active ? 'border-[#2A5C99] dark:border-[#89B4E8]' : 'border-zinc-400'
+                        }`}
+                      >
+                        {active && <span className="h-1.5 w-1.5 rounded-full bg-[#2A5C99] dark:bg-[#89B4E8]" />}
+                      </span>
+                      <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">{opt.title}</span>
+                    </div>
+                    <p className="mt-1 pl-5 text-[11px] text-zinc-500 leading-snug">{opt.desc}</p>
+                  </button>
+                );
+              })}
             </div>
           </div>
 

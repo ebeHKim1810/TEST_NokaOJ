@@ -1,10 +1,11 @@
-﻿"""Contests & Scoreboard API (/api/v1/contests)."""
+"""Contests & Scoreboard API (/api/v1/contests)."""
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from backend.app.core.audit import record_audit_log
+from backend.app.core.cache import app_cache, invalidate_contest_caches
 from backend.app.core.contest_access import (
     can_access_contest,
     ensure_contest_access,
@@ -52,30 +53,100 @@ def list_contests(
     current_user: Optional[dict] = Depends(get_optional_user),
     db: Database = Depends(get_db),
 ):
+    uid_scope = f"u:{current_user['id']}" if current_user else "anon"
+    staff = is_staff(current_user)
+    cache_key = f"contests:list:{'staff' if staff else 'user'}:{uid_scope}"
+    cached = app_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     rows = db.fetchall(
         "SELECT * FROM contests WHERE deleted_at IS NULL ORDER BY start_time DESC"
     )
+    if not rows:
+        res = {"items": []}
+        app_cache.set(cache_key, res, ttl_seconds=20.0)
+        return res
+
+    cids = [int(r["id"]) for r in rows]
+    ph = ", ".join(["%s"] * len(cids))
+
+    # Bulk-load participant counts & restricted flags in O(1) queries
+    p_cnt_rows = db.fetchall(
+        f"SELECT contest_id, COUNT(*) AS cnt FROM contest_participants WHERE contest_id IN ({ph}) GROUP BY contest_id",
+        tuple(cids),
+    )
+    p_cnt_map = {int(r["contest_id"]): int(r["cnt"]) for r in p_cnt_rows}
+
+    restricted_rows = db.fetchall(
+        f"""
+        SELECT DISTINCT contest_id FROM contest_allowed_users WHERE contest_id IN ({ph})
+        UNION
+        SELECT DISTINCT contest_id FROM contest_classrooms WHERE contest_id IN ({ph})
+        """,
+        tuple(cids + cids),
+    )
+    restricted_set = {int(r["contest_id"]) for r in restricted_rows}
+
+    registered_set: set[int] = set()
+    allowed_set: set[int] = set()
+    user_classrooms: set[int] = set()
+    if current_user:
+        uid = int(current_user["id"])
+        reg_rows = db.fetchall(
+            f"SELECT contest_id FROM contest_participants WHERE user_id = %s AND contest_id IN ({ph})",
+            (uid, *cids),
+        )
+        registered_set = {int(r["contest_id"]) for r in reg_rows}
+
+        if not staff:
+            cls_rows = db.fetchall(
+                "SELECT classroom_id FROM classroom_students WHERE student_id = %s", (uid,)
+            )
+            user_classrooms = {int(r["classroom_id"]) for r in cls_rows}
+            allow_rows = db.fetchall(
+                f"""
+                SELECT contest_id FROM contest_allowed_users WHERE user_id = %s AND contest_id IN ({ph})
+                UNION
+                SELECT cc.contest_id FROM contest_classrooms cc
+                JOIN classroom_students cs ON cs.classroom_id = cc.classroom_id
+                WHERE cs.student_id = %s AND cc.contest_id IN ({ph})
+                """,
+                (uid, *cids, uid, *cids),
+            )
+            allowed_set = {int(r["contest_id"]) for r in allow_rows}
+
     items = []
     for r in rows:
-        if not can_access_contest(db, r, current_user):
-            continue
-        p_cnt = db.fetchone(
-            "SELECT COUNT(*) AS cnt FROM contest_participants WHERE contest_id = %s", (r["id"],)
-        )
+        cid = int(r["id"])
+        is_hidden = bool(r.get("is_hidden"))
+        is_restricted = cid in restricted_set
+
+        if not staff:
+            if is_hidden:
+                continue
+            if is_restricted:
+                if not current_user or cid not in allowed_set:
+                    continue
+            else:
+                vis = r.get("visibility") or "public"
+                if vis == "private":
+                    continue
+                if vis == "classroom" and r.get("classroom_id"):
+                    if not current_user or int(r["classroom_id"]) not in user_classrooms:
+                        continue
+
         r["status"] = _contest_status(r)
-        r["participant_count"] = int(p_cnt["cnt"]) if p_cnt else 0
-        r["is_hidden"] = bool(r.get("is_hidden"))
+        r["participant_count"] = p_cnt_map.get(cid, 0)
+        r["is_hidden"] = is_hidden
         r["block_old_code"] = bool(r.get("block_old_code"))
-        r["is_restricted"] = is_contest_restricted(db, int(r["id"]))
-        r["is_registered"] = bool(
-            current_user
-            and db.fetchone(
-                "SELECT 1 FROM contest_participants WHERE contest_id = %s AND user_id = %s",
-                (r["id"], current_user["id"]),
-            )
-        )
+        r["is_restricted"] = is_restricted
+        r["is_registered"] = cid in registered_set
         items.append(r)
-    return {"items": items}
+
+    res = {"items": items}
+    app_cache.set(cache_key, res, ttl_seconds=20.0)
+    return res
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -156,6 +227,7 @@ def create_contest(
     record_audit_log(
         db, current_user["id"], "contest.create", "contest", str(cid), get_client_ip(request)
     )
+    invalidate_contest_caches()
     return db.fetchone("SELECT * FROM contests WHERE id = %s", (cid,))
 
 
@@ -223,6 +295,7 @@ def register_contest(
     if not can_access_contest(db, c, current_user):
         raise HTTPException(status_code=403, detail="You are not allowed to join this contest.")
     _register_user(db, contest_id, int(current_user["id"]))
+    invalidate_contest_caches()
     return {"registered": True, "contest_id": contest_id}
 
 
@@ -290,6 +363,7 @@ def update_contest(
     if payload.is_hidden is not None and len(sets) == 2 and payload.problems is None:
         action = "contest.hide" if payload.is_hidden else "contest.show"
     record_audit_log(db, current_user["id"], action, "contest", str(contest_id), get_client_ip(request))
+    invalidate_contest_caches()
 
     c = db.fetchone("SELECT * FROM contests WHERE id = %s", (contest_id,))
     c["status"] = _contest_status(c)
@@ -312,6 +386,7 @@ def delete_contest(
     record_audit_log(
         db, current_user["id"], "contest.delete", "contest", str(contest_id), get_client_ip(request)
     )
+    invalidate_contest_caches()
     return {"deleted": True, "contest_id": contest_id}
 
 
@@ -403,6 +478,7 @@ def add_contest_users(
     record_audit_log(
         db, current_user["id"], "contest.access.add_users", "contest", str(contest_id), get_client_ip(request)
     )
+    invalidate_contest_caches()
     result = _access_payload(db, contest_id)
     result["added"] = added
     result["not_found"] = not_found
@@ -427,6 +503,7 @@ def remove_contest_user(
             "DELETE FROM contest_participants WHERE contest_id = %s AND user_id = %s",
             (contest_id, user_id),
         )
+    invalidate_contest_caches()
     return _access_payload(db, contest_id)
 
 
@@ -460,6 +537,7 @@ def add_contest_classroom(
     record_audit_log(
         db, current_user["id"], "contest.access.add_classroom", "contest", str(contest_id), get_client_ip(request)
     )
+    invalidate_contest_caches()
     return _access_payload(db, contest_id)
 
 
@@ -486,6 +564,7 @@ def remove_contest_classroom(
                     "DELETE FROM contest_participants WHERE contest_id = %s AND user_id = %s",
                     (contest_id, sid),
                 )
+    invalidate_contest_caches()
     return _access_payload(db, contest_id)
 
 
@@ -509,6 +588,11 @@ def get_scoreboard(
         freeze_cutoff and not is_staff(current_user) and start_dt <= now <= end_dt and now >= freeze_cutoff
     )
 
+    sb_cache_key = f"scoreboard:{contest_id}:{'frozen' if apply_freeze else 'live'}"
+    cached_sb = app_cache.get(sb_cache_key)
+    if cached_sb is not None:
+        return cached_sb
+
     c_problems = db.fetchall(
         """
         SELECT cp.problem_id, cp.label, cp.points, p.code, p.title
@@ -520,39 +604,32 @@ def get_scoreboard(
         (contest_id,),
     )
     problem_points = {str(cp["problem_id"]): int(cp["points"] or 0) for cp in c_problems}
-    # Gather all eligible / active participants: registered, directly assigned,
-    # students in assigned classrooms, and anyone who submitted with contest_id.
-    participants_map: Dict[int, Dict[str, Any]] = {}
-    for q in (
+    # Gather all eligible / active participants in ONE unified UNION query
+    participants = db.fetchall(
         """
         SELECT u.id, u.username, u.full_name
         FROM contest_participants cp
         JOIN users u ON u.id = cp.user_id
         WHERE cp.contest_id = %s AND u.deleted_at IS NULL
-        """,
-        """
+        UNION
         SELECT u.id, u.username, u.full_name
         FROM contest_allowed_users au
         JOIN users u ON u.id = au.user_id
         WHERE au.contest_id = %s AND u.deleted_at IS NULL
-        """,
-        """
-        SELECT DISTINCT u.id, u.username, u.full_name
+        UNION
+        SELECT u.id, u.username, u.full_name
         FROM contest_classrooms cc
         JOIN classroom_students cs ON cs.classroom_id = cc.classroom_id
         JOIN users u ON u.id = cs.student_id
         WHERE cc.contest_id = %s AND u.deleted_at IS NULL
-        """,
-        """
-        SELECT DISTINCT u.id, u.username, u.full_name
+        UNION
+        SELECT u.id, u.username, u.full_name
         FROM submissions s
         JOIN users u ON u.id = s.user_id
         WHERE s.contest_id = %s AND u.deleted_at IS NULL
         """,
-    ):
-        for p in db.fetchall(q, (contest_id,)):
-            participants_map[int(p["id"])] = p
-    participants = list(participants_map.values())
+        (contest_id, contest_id, contest_id, contest_id),
+    )
 
     # Strictly count ONLY submissions made inside THIS contest so prior practice or
     # other-contest results are never carried over when a problem is reused.
@@ -657,10 +734,12 @@ def get_scoreboard(
     for rank, row in enumerate(rows, start=1):
         row["rank"] = rank
 
-    return {
+    sb_res = {
         "contest_id": contest_id,
         "frozen": apply_freeze,
         "problems": c_problems,
         "max_total": sum(problem_points.values()),
         "standings": rows,
     }
+    app_cache.set(sb_cache_key, sb_res, ttl_seconds=10.0)
+    return sb_res

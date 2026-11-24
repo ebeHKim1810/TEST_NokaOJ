@@ -48,3 +48,37 @@ export const DifficultyBadge: React.FC<{ difficulty: string }> = ({ difficulty }
     </span>
   );
 };
+
+export const VisibilityBadge: React.FC<{ visibility: string; allowedCount?: number }> = ({
+  visibility,
+  allowedCount,
+}) => {
+  const v = (visibility || 'public').toLowerCase();
+  const map: Record<string, { label: string; cls: string }> = {
+    public: {
+      label: 'Public',
+      cls: 'bg-[#EBF7F0] text-[#1F6F45] border-[#84CBA3]/60 dark:bg-[#84CBA3]/15 dark:text-[#98DFB5]',
+    },
+    private: {
+      label:
+        typeof allowedCount === 'number' && allowedCount > 0
+          ? `Private (${allowedCount})`
+          : 'Private',
+      cls: 'bg-[#FEF4EA] text-[#945214] border-[#EDB57E]/60 dark:bg-[#EDB57E]/15 dark:text-[#F3C89A]',
+    },
+    hidden: {
+      label: 'Hidden',
+      cls: 'bg-zinc-100 text-zinc-600 border-zinc-300/80 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700',
+    },
+    classroom: {
+      label: 'Classroom',
+      cls: 'bg-[#EBF3FC] text-[#2A5C99] border-[#89B4E8]/60 dark:bg-[#89B4E8]/15 dark:text-[#A7C8F0]',
+    },
+  };
+  const cfg = map[v] || map.public;
+  return (
+    <span className={`inline-flex items-center rounded border px-2 py-0.5 text-[11px] font-medium ${cfg.cls}`}>
+      {cfg.label}
+    </span>
+  );
+};

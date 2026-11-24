@@ -103,22 +103,19 @@ def login(
 
 @router.get("/me")
 def get_me(current_user: dict = Depends(get_current_user), db: Database = Depends(get_db)):
-    solved = db.fetchone(
+    row = db.fetchone(
         """
-        SELECT COUNT(DISTINCT problem_id) AS cnt
+        SELECT COUNT(DISTINCT CASE WHEN verdict = 'AC' THEN problem_id END) AS solved_cnt,
+               COUNT(*) AS total_cnt
         FROM submissions
-        WHERE user_id = %s AND verdict = 'AC'
+        WHERE user_id = %s
         """,
-        (current_user["id"],),
-    )
-    total_subs = db.fetchone(
-        "SELECT COUNT(*) AS cnt FROM submissions WHERE user_id = %s",
         (current_user["id"],),
     )
     return {
         **current_user,
         "stats": {
-            "solved_count": int(solved["cnt"]) if solved else 0,
-            "submission_count": int(total_subs["cnt"]) if total_subs else 0,
+            "solved_count": int(row["solved_cnt"]) if row and row["solved_cnt"] is not None else 0,
+            "submission_count": int(row["total_cnt"]) if row and row["total_cnt"] is not None else 0,
         },
     }

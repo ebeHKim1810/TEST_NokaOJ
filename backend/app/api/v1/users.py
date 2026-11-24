@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from backend.app.core.audit import record_audit_log
+from backend.app.core.cache import invalidate_user_caches
 from backend.app.core.database import Database, get_db
 from backend.app.core.security import (
     get_client_ip,
@@ -38,9 +39,27 @@ def list_users(
         """,
         tuple(params),
     )
+    if not rows:
+        return {"items": [], "total": 0}
+    uids = [int(r["id"]) for r in rows]
+    ph = ", ".join(["%s"] * len(uids))
+    role_rows = db.fetchall(
+        f"""
+        SELECT ur.user_id, r.name
+        FROM user_roles ur
+        JOIN roles r ON r.id = ur.role_id
+        WHERE ur.user_id IN ({ph})
+        ORDER BY r.id ASC
+        """,
+        tuple(uids),
+    )
+    roles_map: dict[int, list[str]] = {}
+    for rr in role_rows:
+        roles_map.setdefault(int(rr["user_id"]), []).append(rr["name"])
+
     result = []
     for row in rows:
-        roles = get_user_roles(db, int(row["id"]))
+        roles = roles_map.get(int(row["id"]), [])
         if role and role not in roles:
             continue
         row["roles"] = roles
@@ -98,6 +117,7 @@ def create_user(
         get_client_ip(request),
         {"username": payload.username, "roles": payload.roles},
     )
+    invalidate_user_caches(uid)
     return {
         "id": uid,
         "username": payload.username,
@@ -145,6 +165,7 @@ def update_user(
         get_client_ip(request),
         (payload.model_dump(exclude_none=True) if hasattr(payload, "model_dump") else payload.dict(exclude_none=True)),
     )
+    invalidate_user_caches(user_id)
     updated = db.fetchone(
         "SELECT id, username, email, full_name, is_active, created_at FROM users WHERE id = %s",
         (user_id,),
@@ -182,4 +203,5 @@ def delete_user(
         get_client_ip(request),
         {"username": user["username"], "email": user["email"]},
     )
+    invalidate_user_caches(user_id)
     return {"deleted": True, "user_id": user_id}

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from backend.app.core.audit import record_audit_log
+from backend.app.core.cache import invalidate_problem_caches
 from backend.app.core.database import Database, get_db
 from backend.app.core.queue import judge_execution_slot
 from backend.app.core.security import get_client_ip, is_admin, require_roles
@@ -214,6 +215,7 @@ def save_generated_batch_to_problem(
         get_client_ip(request),
         {"batch_id": batch_id, "saved_count": len(saved)},
     )
+    invalidate_problem_caches()
     return {"saved_count": len(saved), "saved": saved}
 
 

@@ -70,16 +70,27 @@ def list_classrooms(
             (current_user["id"],),
         )
 
-    for r in rows:
-        sc = db.fetchone(
-            "SELECT COUNT(*) AS cnt FROM classroom_students WHERE classroom_id = %s", (r["id"],)
-        )
-        ac = db.fetchone(
-            "SELECT COUNT(*) AS cnt FROM assignments WHERE classroom_id = %s AND deleted_at IS NULL",
-            (r["id"],),
-        )
-        r["student_count"] = int(sc["cnt"]) if sc else 0
-        r["assignment_count"] = int(ac["cnt"]) if ac else 0
+    if rows:
+        cids = [int(r["id"]) for r in rows]
+        ph = ", ".join(["%s"] * len(cids))
+        sc_map = {
+            int(x["classroom_id"]): int(x["cnt"])
+            for x in db.fetchall(
+                f"SELECT classroom_id, COUNT(*) AS cnt FROM classroom_students WHERE classroom_id IN ({ph}) GROUP BY classroom_id",
+                tuple(cids),
+            )
+        }
+        ac_map = {
+            int(x["classroom_id"]): int(x["cnt"])
+            for x in db.fetchall(
+                f"SELECT classroom_id, COUNT(*) AS cnt FROM assignments WHERE classroom_id IN ({ph}) AND deleted_at IS NULL GROUP BY classroom_id",
+                tuple(cids),
+            )
+        }
+        for r in rows:
+            cid = int(r["id"])
+            r["student_count"] = sc_map.get(cid, 0)
+            r["assignment_count"] = ac_map.get(cid, 0)
     return {"items": rows}
 
 
@@ -154,17 +165,25 @@ def get_classroom_detail(
         """,
         (classroom_id,),
     )
-    for a in assignments:
-        a["problems"] = db.fetchall(
-            """
-            SELECT p.id, p.code, p.title, p.difficulty, ap.points
+    if assignments:
+        aids = [int(a["id"]) for a in assignments]
+        aph = ", ".join(["%s"] * len(aids))
+        ap_rows = db.fetchall(
+            f"""
+            SELECT ap.assignment_id, p.id, p.code, p.title, p.difficulty, ap.points
             FROM assignment_problems ap
             JOIN problems p ON p.id = ap.problem_id
-            WHERE ap.assignment_id = %s
+            WHERE ap.assignment_id IN ({aph})
             ORDER BY ap.order_index ASC
             """,
-            (a["id"],),
+            tuple(aids),
         )
+        ap_map: dict[int, list[dict]] = {}
+        for ap in ap_rows:
+            aid = int(ap.pop("assignment_id"))
+            ap_map.setdefault(aid, []).append(ap)
+        for a in assignments:
+            a["problems"] = ap_map.get(int(a["id"]), [])
 
     students = []
     if is_staff(current_user):
@@ -326,37 +345,58 @@ def get_classroom_progress(
         (classroom_id,),
     )
 
+    sids = [int(st["id"]) for st in students]
+    best_map: dict[tuple[int, int], tuple[int, bool]] = {}
+    sub_cnt_map: dict[int, int] = {}
+
+    if sids and prob_ids:
+        s_ph = ", ".join(["%s"] * len(sids))
+        p_ph = ", ".join(["%s"] * len(prob_ids))
+        best_rows = db.fetchall(
+            f"""
+            SELECT user_id, problem_id,
+                   MAX(score) AS best_score,
+                   MAX(CASE WHEN verdict = 'AC' THEN 1 ELSE 0 END) AS is_ac
+            FROM submissions
+            WHERE user_id IN ({s_ph}) AND problem_id IN ({p_ph})
+            GROUP BY user_id, problem_id
+            """,
+            tuple(sids + prob_ids),
+        )
+        for br in best_rows:
+            best_map[(int(br["user_id"]), int(br["problem_id"]))] = (
+                int(br["best_score"] or 0),
+                bool(br["is_ac"]),
+            )
+    if sids:
+        s_ph = ", ".join(["%s"] * len(sids))
+        cnt_rows = db.fetchall(
+            f"SELECT user_id, COUNT(*) AS cnt FROM submissions WHERE user_id IN ({s_ph}) GROUP BY user_id",
+            tuple(sids),
+        )
+        sub_cnt_map = {int(cr["user_id"]): int(cr["cnt"]) for cr in cnt_rows}
+
     progress = []
     for st in students:
         sid = int(st["id"])
-        solved_ids = set()
+        solved_count = 0
         total_score = 0
         for pid in prob_ids:
-            best = db.fetchone(
-                """
-                SELECT MAX(score) AS best_score,
-                       MAX(CASE WHEN verdict = 'AC' THEN 1 ELSE 0 END) AS is_ac
-                FROM submissions
-                WHERE user_id = %s AND problem_id = %s
-                """,
-                (sid, pid),
-            )
-            if best and best["best_score"] is not None:
-                total_score += int(best["best_score"])
-            if best and best["is_ac"]:
-                solved_ids.add(pid)
-
-        sub_cnt = db.fetchone("SELECT COUNT(*) AS cnt FROM submissions WHERE user_id = %s", (sid,))
+            entry = best_map.get((sid, pid))
+            if entry is not None:
+                total_score += entry[0]
+                if entry[1]:
+                    solved_count += 1
         progress.append(
             {
                 "student_id": sid,
                 "username": st["username"],
                 "full_name": st["full_name"],
-                "ac_count": len(solved_ids),
-                "unsolved_count": max(0, len(prob_ids) - len(solved_ids)),
+                "ac_count": solved_count,
+                "unsolved_count": max(0, len(prob_ids) - solved_count),
                 "total_assigned": len(prob_ids),
                 "total_score": total_score,
-                "submission_count": int(sub_cnt["cnt"]) if sub_cnt else 0,
+                "submission_count": sub_cnt_map.get(sid, 0),
             }
         )
 

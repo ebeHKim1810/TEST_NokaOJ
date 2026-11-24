@@ -95,6 +95,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   useEffect(() => {
+    // Warm up stateless Backend + Neon DB in parallel right on first paint
+    api.pingHealth();
     refreshPublicConfig();
     refreshUser();
   }, [refreshPublicConfig, refreshUser]);

@@ -56,15 +56,23 @@ def my_assignments(
         """,
         (current_user["id"],),
     )
-    for a in rows:
-        a["problems"] = db.fetchall(
-            """
-            SELECT p.id, p.code, p.title, p.difficulty, ap.points
+    if rows:
+        aids = [int(a["id"]) for a in rows]
+        aph = ", ".join(["%s"] * len(aids))
+        ap_rows = db.fetchall(
+            f"""
+            SELECT ap.assignment_id, p.id, p.code, p.title, p.difficulty, ap.points
             FROM assignment_problems ap
             JOIN problems p ON p.id = ap.problem_id
-            WHERE ap.assignment_id = %s
+            WHERE ap.assignment_id IN ({aph})
             ORDER BY ap.order_index ASC
             """,
-            (a["id"],),
+            tuple(aids),
         )
+        ap_map: dict[int, list[dict]] = {}
+        for ap in ap_rows:
+            aid = int(ap.pop("assignment_id"))
+            ap_map.setdefault(aid, []).append(ap)
+        for a in rows:
+            a["problems"] = ap_map.get(int(a["id"]), [])
     return {"items": rows}

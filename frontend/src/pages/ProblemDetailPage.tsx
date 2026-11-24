@@ -370,17 +370,40 @@ export const ProblemDetailPage: React.FC = () => {
         )}
 
         {latestSub && (
-          <div className="noka-section p-3.5 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2.5">
-              <span className="font-mono text-zinc-500">Submission #{latestSub.id}</span>
-              <VerdictBadge verdict={latestSub.verdict} />
-              <span className="font-mono">
-                {latestSub.score}/{latestSub.max_score} điểm · {latestSub.execution_time_ms} ms
-              </span>
+          <div className="noka-section p-3.5 space-y-2 text-xs">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <span className="font-mono text-zinc-500">Submission #{latestSub.id}</span>
+                <VerdictBadge verdict={latestSub.verdict} />
+                <span className="font-mono">
+                  {latestSub.score}/{latestSub.max_score} điểm · {latestSub.execution_time_ms} ms
+                </span>
+              </div>
+              {latestSub.discarded_by_retention ? (
+                latestSub.kept_submission_id && (
+                  <Link
+                    to={`/submissions/${latestSub.kept_submission_id}`}
+                    className="font-medium text-[#2A5C99] dark:text-[#89B4E8] hover:underline"
+                  >
+                    Xem bài điểm cao nhất (#{latestSub.kept_submission_id})
+                  </Link>
+                )
+              ) : (
+                <Link to={`/submissions/${latestSub.id}`} className="font-medium text-[#2A5C99] dark:text-[#89B4E8] hover:underline">
+                  Xem chi tiết
+                </Link>
+              )}
             </div>
-            <Link to={`/submissions/${latestSub.id}`} className="font-medium text-[#2A5C99] dark:text-[#89B4E8] hover:underline">
-              Xem chi tiết
-            </Link>
+            {latestSub.compile_output && (
+              <pre className="rounded bg-[#FDF0F4] dark:bg-[#29151C] p-2.5 text-[#9B3558] dark:text-[#F1B4C8] overflow-x-auto whitespace-pre-wrap">
+                {latestSub.compile_output}
+              </pre>
+            )}
+            {latestSub.discarded_by_retention && (
+              <div className="rounded border border-amber-300/70 dark:border-amber-800/70 bg-amber-50 dark:bg-amber-950/30 px-2.5 py-1.5 text-[11px] text-amber-900 dark:text-amber-200">
+                Chế độ <strong>Lưu lần điểm cao nhất</strong>: Hệ thống giữ lại bài nộp #{latestSub.kept_submission_id} ({latestSub.kept_score} điểm — {latestSub.kept_verdict}) và tự động xóa lần nộp điểm thấp hơn này để tiết kiệm dung lượng.
+              </div>
+            )}
           </div>
         )}
       </div>
