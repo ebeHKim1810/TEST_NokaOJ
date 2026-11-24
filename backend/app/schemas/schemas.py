@@ -41,6 +41,7 @@ class ProblemCreateRequest(BaseModel):
     constraints_md: str = Field("", max_length=50000)
     sample_input: str = Field("", max_length=50000)
     sample_output: str = Field("", max_length=50000)
+    explanation: Optional[str] = Field(None, max_length=100000)
     time_limit_ms: int = Field(1000, ge=100, le=30000)
     memory_limit_mb: int = Field(256, ge=16, le=2048)
     points: int = Field(100, ge=1, le=10000)
@@ -62,6 +63,7 @@ class ProblemUpdateRequest(BaseModel):
     constraints_md: Optional[str] = None
     sample_input: Optional[str] = None
     sample_output: Optional[str] = None
+    explanation: Optional[str] = Field(None, max_length=100000)
     time_limit_ms: Optional[int] = Field(None, ge=100, le=30000)
     memory_limit_mb: Optional[int] = Field(None, ge=16, le=2048)
     points: Optional[int] = Field(None, ge=1, le=10000)

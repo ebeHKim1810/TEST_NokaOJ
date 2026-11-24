@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS problems (
     constraints_md TEXT NOT NULL DEFAULT '',
     sample_input TEXT NOT NULL DEFAULT '',
     sample_output TEXT NOT NULL DEFAULT '',
+    explanation TEXT NULL,
     time_limit_ms INTEGER NOT NULL DEFAULT 1000,
     memory_limit_mb INTEGER NOT NULL DEFAULT 256,
     points INTEGER NOT NULL DEFAULT 100,

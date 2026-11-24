@@ -1,7 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
-import { Play, Send, Clock, Cpu, Award, Settings, ArrowLeft, Trophy } from 'lucide-react';
+import {
+  Play,
+  Send,
+  Clock,
+  Cpu,
+  Award,
+  Settings,
+  ArrowLeft,
+  Trophy,
+  BookOpen,
+  Code2,
+  ChevronsLeft,
+  ChevronsRight,
+} from 'lucide-react';
 import { api } from '../services/api';
 import { useApp } from '../stores/AppContext';
 import { DifficultyBadge, VerdictBadge } from '../components/StatusBadge';
@@ -31,6 +44,8 @@ export const ProblemDetailPage: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [sampleResult, setSampleResult] = useState<any>(null);
   const [latestSub, setLatestSub] = useState<any>(null);
+  const [codeCollapsed, setCodeCollapsed] = useState(false);
+  const [mobileTab, setMobileTab] = useState<'statement' | 'code'>('statement');
 
   const getDraftKey = (probCode: string, lang: LanguageId) =>
     contestId ? `noka_draft_c${contestId}_${probCode}_${lang}` : `noka_draft_${probCode}_${lang}`;
@@ -167,9 +182,39 @@ export const ProblemDetailPage: React.FC = () => {
           Bạn đang tham gia kỳ thi có khóa xem lại code cũ — bản nháp và bài nộp cũ không được hiển thị.
         </div>
       )}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-      {/* Left: Statement (5 cols on lg -> spacious reading) */}
-      <div className="lg:col-span-6 space-y-5">
+      {/* Mobile Tab Switcher (Đề bài / Code) */}
+      <div className="flex lg:hidden rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-[#15181E] p-1 gap-1">
+        <button
+          type="button"
+          onClick={() => setMobileTab('statement')}
+          className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors ${
+            mobileTab === 'statement'
+              ? 'bg-white dark:bg-[#1E222B] text-[#2A5C99] dark:text-[#89B4E8] shadow-sm'
+              : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
+          }`}
+        >
+          <BookOpen className="h-3.5 w-3.5" /> Đề bài
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileTab('code')}
+          className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors ${
+            mobileTab === 'code'
+              ? 'bg-white dark:bg-[#1E222B] text-[#2A5C99] dark:text-[#89B4E8] shadow-sm'
+              : 'text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
+          }`}
+        >
+          <Code2 className="h-3.5 w-3.5" /> Khung Code
+        </button>
+      </div>
+
+      <div className="flex flex-col lg:flex-row gap-5 items-start">
+      {/* Left: Statement (expands to 100% width when Code panel is collapsed on desktop) */}
+      <div
+        className={`${mobileTab === 'code' ? 'hidden lg:block' : 'block'} w-full ${
+          codeCollapsed ? 'lg:flex-1' : 'lg:w-1/2'
+        } min-w-0 space-y-5`}
+      >
         <div className="border-b border-zinc-200 dark:border-zinc-800 pb-4">
           <div className="flex items-start justify-between gap-2">
             <div>
@@ -257,6 +302,15 @@ export const ProblemDetailPage: React.FC = () => {
               </div>
             </div>
           )}
+
+          {problem.explanation && problem.explanation.trim().length > 0 && (
+            <div className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-[#14171D] p-4 space-y-2">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-[#2A5C99] dark:text-[#89B4E8]">
+                Giải thích
+              </h2>
+              <MarkdownLatex content={problem.explanation} />
+            </div>
+          )}
         </section>
 
         {problem.recent_submissions && problem.recent_submissions.length > 0 && (
@@ -296,11 +350,24 @@ export const ProblemDetailPage: React.FC = () => {
         )}
       </div>
 
-      {/* Right: Monaco Editor & Judge Output */}
-      <div className="lg:col-span-6 space-y-3 lg:sticky lg:top-20">
+      {/* Right: Monaco Editor & Judge Output (kept mounted in DOM when collapsed so code & undo history are preserved) */}
+      <div
+        className={`${mobileTab === 'statement' ? 'hidden' : 'block'} ${
+          codeCollapsed ? 'lg:hidden' : 'lg:block'
+        } w-full lg:w-1/2 min-w-0 space-y-3 lg:sticky lg:top-20`}
+      >
         <div className="noka-section overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-[#15181E] px-3 py-2">
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCodeCollapsed(true)}
+                title="Thu gọn khung code để mở rộng đề bài"
+                className="hidden lg:inline-flex items-center gap-1 rounded border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2 py-1 text-xs text-zinc-600 dark:text-zinc-300 hover:border-[#2A5C99] hover:text-[#2A5C99] dark:hover:border-[#89B4E8] dark:hover:text-[#89B4E8] transition-colors"
+              >
+                <ChevronsRight className="h-3.5 w-3.5" />
+                <span className="hidden xl:inline">Thu gọn</span>
+              </button>
               <select
                 value={language}
                 onChange={(e) => handleLanguageChange(e.target.value as LanguageId)}
@@ -310,7 +377,7 @@ export const ProblemDetailPage: React.FC = () => {
                 <option value="cpp20">C++20 (GCC)</option>
                 <option value="python3">Python 3</option>
               </select>
-              <span className="text-[11px] text-zinc-400">Tự động lưu nháp</span>
+              <span className="hidden sm:inline text-[11px] text-zinc-400">Tự động lưu nháp</span>
             </div>
 
             <div className="flex items-center gap-2">
@@ -407,6 +474,21 @@ export const ProblemDetailPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Collapsed Code Editor Rail on Desktop */}
+      {codeCollapsed && (
+        <button
+          type="button"
+          onClick={() => setCodeCollapsed(false)}
+          title="Mở lại khung soạn thảo code"
+          className="hidden lg:flex flex-col items-center gap-3 sticky top-20 w-10 shrink-0 rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-[#15181E] py-3.5 px-1.5 text-zinc-600 dark:text-zinc-300 hover:border-[#2A5C99] hover:text-[#2A5C99] dark:hover:border-[#89B4E8] dark:hover:text-[#89B4E8] transition-colors shadow-sm"
+        >
+          <ChevronsLeft className="h-4 w-4 shrink-0 text-[#2A5C99] dark:text-[#89B4E8]" />
+          <span className="text-xs font-medium tracking-wide [writing-mode:vertical-rl] rotate-180 select-none">
+            Mở khung code
+          </span>
+        </button>
+      )}
       </div>
     </div>
   );

@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Eye, Save, Upload, Download, Trash2, Plus, Sparkles, Code2, Shield, HardDrive } from 'lucide-react';
+import { Save, Upload, Download, Trash2, Plus, Sparkles, Code2, Shield, HardDrive } from 'lucide-react';
 import { api } from '../services/api';
 import { useApp } from '../stores/AppContext';
-import { MarkdownLatex } from '../components/MarkdownLatex';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ProblemAccessPicker } from '../components/ProblemAccessPicker';
+import { RichMarkdownField } from '../components/RichMarkdownToolbar';
 import { TestcaseGeneratorPanel } from '../features/testcase-generator/TestcaseGeneratorPanel';
 import { AllowedUserItem, SubmissionRetentionMode, TestcaseGroup, TestcaseItem, Visibility } from '../types';
 
@@ -68,7 +68,6 @@ export const AdminProblemManagerPage: React.FC = () => {
   const { toast } = useApp();
 
   const [tab, setTab] = useState<'info' | 'testcases' | 'generator'>('info');
-  const [preview, setPreview] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [form, setForm] = useState({
@@ -80,6 +79,7 @@ export const AdminProblemManagerPage: React.FC = () => {
     constraints_md: '',
     sample_input: '',
     sample_output: '',
+    explanation: '',
     time_limit_ms: 1000,
     memory_limit_mb: 256,
     points: 100,
@@ -122,6 +122,7 @@ export const AdminProblemManagerPage: React.FC = () => {
           constraints_md: p.constraints_md || '',
           sample_input: p.sample_input || '',
           sample_output: p.sample_output || '',
+          explanation: p.explanation || '',
           time_limit_ms: p.time_limit_ms || 1000,
           memory_limit_mb: p.memory_limit_mb || 256,
           points: p.points || 100,
@@ -381,27 +382,15 @@ export const AdminProblemManagerPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="noka-section p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Nội dung đề bài (Markdown + LaTeX)</span>
-              <button type="button" onClick={() => setPreview((v) => !v)} className="noka-btn-secondary text-xs">
-                <Eye className="h-3.5 w-3.5" /> {preview ? 'Chỉnh sửa' : 'Xem trước (Preview)'}
-              </button>
-            </div>
-
-            {preview ? (
-              <div className="min-h-[200px] rounded border border-zinc-200 dark:border-zinc-800 p-4">
-                <MarkdownLatex content={form.statement_md} />
-              </div>
-            ) : (
-              <textarea
-                rows={8}
-                value={form.statement_md}
-                onChange={(e) => setForm({ ...form, statement_md: e.target.value })}
-                placeholder="Cho hai số nguyên $a, b$ ($|a|, |b| \le 10^9$). Hãy tính tổng $a + b$..."
-                className="noka-input font-mono text-xs"
-              />
-            )}
+          <div className="noka-section p-4 space-y-4">
+            <RichMarkdownField
+              label="Nội dung đề bài (Markdown + LaTeX)"
+              value={form.statement_md}
+              onChange={(next) => setForm((prev) => ({ ...prev, statement_md: next }))}
+              rows={9}
+              placeholder="Cho hai số nguyên $a, b$ ($|a|, |b| \le 10^9$). Hãy tính tổng $a + b$..."
+              emptyPreviewText="Chưa có nội dung đề bài."
+            />
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
@@ -427,6 +416,17 @@ export const AdminProblemManagerPage: React.FC = () => {
                 <label className="block text-xs text-zinc-500 mb-1">Sample Output</label>
                 <textarea rows={3} value={form.sample_output} onChange={(e) => setForm({ ...form, sample_output: e.target.value })} className="noka-input font-mono text-xs" />
               </div>
+            </div>
+
+            <div className="border-t border-zinc-200 dark:border-zinc-800 pt-4">
+              <RichMarkdownField
+                label="Giải thích đề bài / Ví dụ (Tùy chọn)"
+                value={form.explanation}
+                onChange={(next) => setForm((prev) => ({ ...prev, explanation: next }))}
+                rows={5}
+                placeholder="Giải thích chi tiết ví dụ mẫu, hỗ trợ Markdown, công thức LaTeX ($\frac{a}{b}$, $\sqrt{n}$) và chèn hình ảnh minh họa..."
+                emptyPreviewText="Chưa có phần giải thích (mục này sẽ tự động ẩn với học sinh nếu để trống)."
+              />
             </div>
           </div>
 

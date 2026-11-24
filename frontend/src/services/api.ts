@@ -177,6 +177,21 @@ export const api = {
     }
   ) => request<any>(`/problems/${id}/access`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteProblem: (id: number) => request<any>(`/problems/${id}`, { method: 'DELETE' }),
+  uploadProblemImage: (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return request<{
+      url: string;
+      path: string;
+      filename: string;
+      storage_key: string;
+      size_bytes: number;
+      content_type: string;
+    }>('/problems/upload-image', {
+      method: 'POST',
+      body: fd,
+    });
+  },
 
   // Testcases
   listTestcases: (problemId: number) => request<any>(`/testcases/problem/${problemId}`),

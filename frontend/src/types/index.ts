@@ -49,6 +49,7 @@ export interface ProblemDetail extends ProblemSummary {
   constraints_md: string;
   sample_input: string;
   sample_output: string;
+  explanation?: string | null;
   checker_type: 'standard' | 'strict' | 'float_tol' | 'custom';
   checker_language?: 'python3' | 'cpp17' | 'cpp20';
   checker_source?: string;

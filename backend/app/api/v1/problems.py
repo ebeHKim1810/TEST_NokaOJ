@@ -1,9 +1,10 @@
 """Problemset & Problem CRUD API routes (/api/v1/problems)."""
 import re
+import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 
 from backend.app.core.audit import record_audit_log
 from backend.app.core.cache import app_cache, invalidate_problem_caches
@@ -74,12 +75,134 @@ def _can_edit_problem(user: Dict[str, Any], problem: Dict[str, Any]) -> bool:
     return "teacher" in user.get("roles", []) and problem.get("created_by") == user["id"]
 
 
+MAX_PROBLEM_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
+ALLOWED_IMAGE_MIMES: Dict[str, Tuple[str, str]] = {
+    "image/png": (".png", "image/png"),
+    "image/jpeg": (".jpg", "image/jpeg"),
+    "image/jpg": (".jpg", "image/jpeg"),
+    "image/webp": (".webp", "image/webp"),
+    "image/gif": (".gif", "image/gif"),
+}
+EXT_TO_IMAGE_MIME: Dict[str, str] = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
+}
+SAFE_IMAGE_FILENAME_RE = re.compile(r"^[a-f0-9]{16,64}\.(png|jpg|jpeg|webp|gif)$")
+
+
+def _detect_image_format(data: bytes) -> Optional[Tuple[str, str]]:
+    """Verifies image magic bytes and returns (extension, canonical_mime) for PNG/JPEG/WEBP/GIF."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return (".png", "image/png")
+    if data.startswith(b"\xff\xd8\xff"):
+        return (".jpg", "image/jpeg")
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return (".webp", "image/webp")
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return (".gif", "image/gif")
+    return None
+
+
 @router.get("/tags/all")
 def list_tags(db: Database = Depends(get_db)):
     return app_cache.get_or_set(
         "tags:all",
         lambda: {"items": db.fetchall("SELECT id, name, slug FROM tags ORDER BY name ASC")},
         ttl_seconds=60.0,
+    )
+
+
+@router.post("/upload-image", status_code=status.HTTP_201_CREATED)
+async def upload_problem_image(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_roles("admin", "teacher")),
+    db: Database = Depends(get_db),
+    storage: BaseStorage = Depends(get_storage),
+):
+    """
+    Uploads an image (PNG/JPEG/WEBP/GIF, max 5MB) to Cloudflare R2 (`problem-images/`)
+    for embedding inside problem statements and explanations.
+    """
+    raw_mime = (file.content_type or "").split(";")[0].strip().lower()
+    if raw_mime not in ALLOWED_IMAGE_MIMES:
+        raise HTTPException(
+            status_code=400,
+            detail="Chỉ chấp nhận định dạng ảnh PNG, JPEG, WEBP hoặc GIF.",
+        )
+
+    data = await file.read(MAX_PROBLEM_IMAGE_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="File ảnh trống.")
+    if len(data) > MAX_PROBLEM_IMAGE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="Ảnh vượt quá dung lượng tối đa 5MB. Vui lòng nén hoặc chọn ảnh nhỏ hơn.",
+        )
+
+    detected = _detect_image_format(data)
+    if not detected:
+        raise HTTPException(
+            status_code=400,
+            detail="Nội dung file không phải ảnh hợp lệ (PNG, JPEG, WEBP, GIF).",
+        )
+
+    ext, canonical_mime = detected
+    filename = f"{uuid.uuid4().hex}{ext}"
+    storage_key = f"problem-images/{filename}"
+    storage.put_bytes(storage_key, data)
+
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https").split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc).strip()
+    path = f"/api/v1/problems/images/{filename}"
+    image_url = f"{proto}://{host}{path}" if host else path
+
+    record_audit_log(
+        db,
+        current_user["id"],
+        "problem.image.upload",
+        "problem_image",
+        filename,
+        get_client_ip(request),
+        {"storage_key": storage_key, "size_bytes": len(data), "content_type": canonical_mime},
+    )
+    return {
+        "url": image_url,
+        "path": path,
+        "filename": filename,
+        "storage_key": storage_key,
+        "size_bytes": len(data),
+        "content_type": canonical_mime,
+    }
+
+
+@router.get("/images/{filename}")
+def get_problem_image(
+    filename: str,
+    storage: BaseStorage = Depends(get_storage),
+):
+    """Streams a stored problem image from Cloudflare R2 / local storage with 1-year immutable caching."""
+    clean = (filename or "").strip().lower()
+    if not SAFE_IMAGE_FILENAME_RE.match(clean):
+        raise HTTPException(status_code=400, detail="Invalid image filename.")
+
+    data = storage.get_bytes(f"problem-images/{clean}")
+    if not data:
+        raise HTTPException(status_code=404, detail="Image not found.")
+
+    ext = clean.rsplit(".", 1)[-1]
+    media_type = EXT_TO_IMAGE_MIME.get(ext, "application/octet-stream")
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Cross-Origin-Resource-Policy": "cross-origin",
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
@@ -464,14 +587,15 @@ def create_problem(
         checker_key = f"checkers/{code}_checker.{ext}"
         storage.put_text(checker_key, payload.checker_source)
 
+    explanation_val = payload.explanation if (payload.explanation and payload.explanation.strip()) else None
     pid = db.insert_returning_id(
         """
         INSERT INTO problems (
             code, title, statement_md, input_description, output_description,
-            constraints_md, sample_input, sample_output, time_limit_ms,
+            constraints_md, sample_input, sample_output, explanation, time_limit_ms,
             memory_limit_mb, points, difficulty, visibility, submission_retention_mode,
             checker_type, checker_language, checker_storage_key, created_by
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             code,
@@ -482,6 +606,7 @@ def create_problem(
             payload.constraints_md,
             payload.sample_input,
             payload.sample_output,
+            explanation_val,
             payload.time_limit_ms,
             payload.memory_limit_mb,
             payload.points,
@@ -525,6 +650,8 @@ def update_problem(
         raise HTTPException(status_code=403, detail="You can only edit problems you manage.")
 
     data = (payload.model_dump(exclude_none=True) if hasattr(payload, "model_dump") else payload.dict(exclude_none=True))
+    if "explanation" in data and not str(data["explanation"]).strip():
+        data["explanation"] = None
     tags = data.pop("tags", None)
     allowed_user_ids = data.pop("allowed_user_ids", None)
     checker_src = data.pop("checker_source", None)

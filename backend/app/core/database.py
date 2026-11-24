@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS problems (
     constraints_md TEXT NOT NULL DEFAULT '',
     sample_input TEXT NOT NULL DEFAULT '',
     sample_output TEXT NOT NULL DEFAULT '',
+    explanation TEXT NULL,
     time_limit_ms INTEGER NOT NULL DEFAULT 1000,
     memory_limit_mb INTEGER NOT NULL DEFAULT 256,
     points INTEGER NOT NULL DEFAULT 100,
@@ -460,6 +461,8 @@ class Database:
                     conn.execute("ALTER TABLE problems ADD COLUMN checker_language VARCHAR(32) NOT NULL DEFAULT 'python3'")
                 if "submission_retention_mode" not in p_cols:
                     conn.execute("ALTER TABLE problems ADD COLUMN submission_retention_mode VARCHAR(16) NOT NULL DEFAULT 'latest'")
+                if "explanation" not in p_cols:
+                    conn.execute("ALTER TABLE problems ADD COLUMN explanation TEXT NULL")
                 cols = {row[1] for row in conn.execute("PRAGMA table_info(contests)").fetchall()}
                 if "is_hidden" not in cols:
                     conn.execute("ALTER TABLE contests ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT 0")
