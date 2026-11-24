@@ -1,0 +1,75 @@
+@import 'katex/dist/katex.min.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-base: #ffffff;
+    --bg-subtle: #f8f9fb;
+    --border-subtle: #e5e7eb;
+    --text-primary: #111318;
+    --text-muted: #646a73;
+    --accent-blue: #89b4e8;
+    --accent-green: #84cba3;
+    --accent-pink: #e59cb4;
+    --accent-orange: #edb57e;
+  }
+
+  .dark {
+    --bg-base: #0e1013;
+    --bg-subtle: #15181e;
+    --border-subtle: #252a33;
+    --text-primary: #edf0f5;
+    --text-muted: #9098a6;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  code, pre {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+  }
+}
+
+/* Clean developer-tool component primitives (Linear / GitHub / JetBrains aesthetic) */
+.noka-input {
+  @apply w-full rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-[#14171D] px-3 py-1.5 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#7BA7D9] transition-colors;
+}
+
+.noka-btn-primary {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-[#2A5C99] hover:bg-[#224C80] dark:bg-[#89B4E8] dark:hover:bg-[#75A5DF] px-3.5 py-1.5 text-sm font-medium text-white dark:text-[#0E1013] transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.noka-btn-secondary {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-[#15181E] hover:bg-zinc-50 dark:hover:bg-zinc-800/70 px-3 py-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.noka-btn-danger {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-[#E59CB4]/60 bg-[#FDF0F4] dark:bg-[#E59CB4]/10 hover:bg-[#F9DDE6] dark:hover:bg-[#E59CB4]/20 px-3 py-1.5 text-sm font-medium text-[#9B3558] dark:text-[#F1B6C9] transition-colors disabled:opacity-50;
+}
+
+.noka-table {
+  @apply w-full border-collapse text-left text-sm;
+}
+
+.noka-table th {
+  @apply border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-[#15181E] px-3.5 py-2.5 text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400;
+}
+
+.noka-table td {
+  @apply border-b border-zinc-100 dark:border-zinc-800/70 px-3.5 py-2.5 align-middle;
+}
+
+.noka-table tbody tr {
+  @apply hover:bg-zinc-50/80 dark:hover:bg-[#15181E]/70 transition-colors;
+}
+
+.noka-section {
+  @apply border border-zinc-200 dark:border-zinc-800 rounded-md bg-white dark:bg-[#12151B];
+}
