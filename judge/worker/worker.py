@@ -173,36 +173,35 @@ class JudgeEngine:
             chk_temp_ctx = None
             chk_work_dir: Optional[str] = None
             chk_run_cmd: Optional[List[str]] = None
-            if checker_type == "custom":
-                if not checker_source or not checker_source.strip():
-                    return SubmissionJudgeResult(
-                        verdict="IE",
-                        score=0,
-                        max_score=max_points,
-                        execution_time_ms=0,
-                        memory_kb=0,
-                        compile_output="Custom checker source is not configured for this problem.",
-                        results=[],
-                    )
-                chk_temp_ctx = create_exec_temp_dir(prefix="noka_chk_")
-                chk_work_dir = chk_temp_ctx.__enter__()
-                chk_comp = self.compiler.compile_source(
-                    checker_source, checker_language or "python3", chk_work_dir, stem="checker"
-                )
-                if not chk_comp.success:
-                    chk_temp_ctx.__exit__(None, None, None)
-                    return SubmissionJudgeResult(
-                        verdict="IE",
-                        score=0,
-                        max_score=max_points,
-                        execution_time_ms=0,
-                        memory_kb=0,
-                        compile_output=f"Custom checker compile error:\n{chk_comp.output}",
-                        results=[],
-                    )
-                chk_run_cmd = chk_comp.run_cmd
-
             try:
+                if checker_type == "custom":
+                    if not checker_source or not checker_source.strip():
+                        return SubmissionJudgeResult(
+                            verdict="IE",
+                            score=0,
+                            max_score=max_points,
+                            execution_time_ms=0,
+                            memory_kb=0,
+                            compile_output="Custom checker source is not configured for this problem.",
+                            results=[],
+                        )
+                    chk_temp_ctx = create_exec_temp_dir(prefix="noka_chk_")
+                    chk_work_dir = chk_temp_ctx.__enter__()
+                    chk_comp = self.compiler.compile_source(
+                        checker_source, checker_language or "python3", chk_work_dir, stem="checker"
+                    )
+                    if not chk_comp.success:
+                        return SubmissionJudgeResult(
+                            verdict="IE",
+                            score=0,
+                            max_score=max_points,
+                            execution_time_ms=0,
+                            memory_kb=0,
+                            compile_output=f"Custom checker compile error:\n{chk_comp.output}",
+                            results=[],
+                        )
+                    chk_run_cmd = chk_comp.run_cmd
+
                 eff_tl = int(time_limit_ms * comp.language.time_multiplier)
                 eff_ml = memory_limit_mb + comp.language.memory_bonus_mb
 

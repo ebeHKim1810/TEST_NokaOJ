@@ -1,6 +1,9 @@
 """Isolated Sandbox Execution Runner supporting Docker and POSIX rlimit sandboxing."""
 import os
-import resource
+try:
+    import resource
+except ImportError:  # Windows local tooling/tests
+    resource = None  # type: ignore
 import shutil
 import signal
 import stat
@@ -15,6 +18,7 @@ _CACHED_EXEC_ROOT: Optional[str] = None
 
 
 def _dir_supports_exec(base_dir: str) -> bool:
+    probe = ""
     try:
         os.makedirs(base_dir, exist_ok=True)
         probe = os.path.join(base_dir, f".noka_exec_probe_{os.getpid()}.sh")
@@ -22,10 +26,15 @@ def _dir_supports_exec(base_dir: str) -> bool:
             f.write("#!/bin/sh\nexit 0\n")
         os.chmod(probe, stat.S_IRWXU)
         res = subprocess.run([probe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        os.remove(probe)
         return res.returncode == 0
     except Exception:
         return False
+    finally:
+        if probe and os.path.exists(probe):
+            try:
+                os.remove(probe)
+            except OSError:
+                pass
 
 
 def get_exec_work_root() -> str:
@@ -56,6 +65,24 @@ def get_exec_work_root() -> str:
 
 def create_exec_temp_dir(prefix: str = "noka_run_") -> tempfile.TemporaryDirectory:
     return tempfile.TemporaryDirectory(prefix=prefix, dir=get_exec_work_root())
+
+
+def cleanup_stale_exec_dirs() -> int:
+    """Removes any leftover noka_* temp execution directories (e.g. after an abrupt container restart)."""
+    removed = 0
+    try:
+        root = get_exec_work_root()
+        if not os.path.isdir(root):
+            return 0
+        for name in os.listdir(root):
+            if name.startswith("noka_"):
+                full = os.path.join(root, name)
+                if os.path.isdir(full):
+                    shutil.rmtree(full, ignore_errors=True)
+                    removed += 1
+    except Exception:
+        pass
+    return removed
 
 
 @dataclass

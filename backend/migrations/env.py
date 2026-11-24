@@ -10,9 +10,14 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-db_url = os.getenv("DATABASE_URL")
+db_url = (os.getenv("DATABASE_URL") or "").strip()
 if db_url:
-    config.set_main_option("sqlalchemy.url", db_url)
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
+    elif db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    # Escape '%' for Python ConfigParser interpolation (supports URL-encoded passwords & Neon SSL query params)
+    config.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:

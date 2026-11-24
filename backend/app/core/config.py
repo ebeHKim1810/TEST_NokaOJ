@@ -20,8 +20,10 @@ class Settings(BaseModel):
     s3_bucket_name: str
     s3_access_key: str
     s3_secret_key: str
+    s3_region: str
     judge_mode: str
     judge_dispatch_mode: str
+    judge_max_concurrent_threads: int
     rate_limit_requests_per_minute: int
     submit_rate_limit_per_minute: int
     max_upload_size_mb: int
@@ -55,8 +57,12 @@ def get_settings() -> Settings:
         s3_bucket_name=os.getenv("S3_BUCKET_NAME", ""),
         s3_access_key=os.getenv("S3_ACCESS_KEY", ""),
         s3_secret_key=os.getenv("S3_SECRET_KEY", ""),
+        s3_region=os.getenv("S3_REGION", "auto"),
         judge_mode=os.getenv("JUDGE_MODE", "local_posix"),
         judge_dispatch_mode=os.getenv("JUDGE_DISPATCH_MODE", "auto"),
+        judge_max_concurrent_threads=max(
+            1, int(os.getenv("JUDGE_MAX_CONCURRENT_THREADS", "1"))
+        ),
         rate_limit_requests_per_minute=int(os.getenv("RATE_LIMIT_REQUESTS_PER_MINUTE", "240")),
         submit_rate_limit_per_minute=int(os.getenv("SUBMIT_RATE_LIMIT_PER_MINUTE", "30")),
         max_upload_size_mb=int(os.getenv("MAX_UPLOAD_SIZE_MB", "50")),

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from backend.app.core.audit import record_audit_log
 from backend.app.core.contest_access import ensure_contest_access, get_active_code_blocking_contests
 from backend.app.core.database import Database, get_db
-from backend.app.core.queue import enqueue_submission_job
+from backend.app.core.queue import enqueue_submission_job, judge_execution_slot
 from backend.app.core.security import (
     get_client_ip,
     get_current_user,
@@ -58,17 +58,18 @@ def run_sample(
     )
 
     engine = JudgeEngine()
-    return engine.run_sample(
-        source_code=payload.source_code,
-        language_id=payload.language,
-        sample_input=sample_in,
-        expected_output=expected,
-        time_limit_ms=int(prob["time_limit_ms"]),
-        memory_limit_mb=int(prob["memory_limit_mb"]),
-        checker_type=prob.get("checker_type", "standard"),
-        checker_source=checker_source,
-        checker_language=prob.get("checker_language") or "python3",
-    )
+    with judge_execution_slot():
+        return engine.run_sample(
+            source_code=payload.source_code,
+            language_id=payload.language,
+            sample_input=sample_in,
+            expected_output=expected,
+            time_limit_ms=int(prob["time_limit_ms"]),
+            memory_limit_mb=int(prob["memory_limit_mb"]),
+            checker_type=prob.get("checker_type", "standard"),
+            checker_source=checker_source,
+            checker_language=prob.get("checker_language") or "python3",
+        )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)

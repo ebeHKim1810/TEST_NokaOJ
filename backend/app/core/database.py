@@ -270,8 +270,11 @@ class Database:
     """Thread-safe database wrapper translating `%s` placeholders for SQLite seamlessly."""
 
     def __init__(self, database_url: str) -> None:
-        self.database_url = database_url
-        self.is_postgres = database_url.startswith("postgres")
+        normalized = (database_url or "").strip()
+        if normalized.startswith("postgres://"):
+            normalized = normalized.replace("postgres://", "postgresql://", 1)
+        self.database_url = normalized
+        self.is_postgres = normalized.startswith("postgres")
         self._lock = threading.RLock()
         if not self.is_postgres:
             db_path = database_url.replace("sqlite:///", "", 1)
@@ -295,7 +298,10 @@ class Database:
             import psycopg2  # type: ignore
             import psycopg2.extras  # type: ignore
 
-            conn = psycopg2.connect(self.database_url)
+            connect_kwargs: Dict[str, Any] = {}
+            if "connect_timeout=" not in self.database_url:
+                connect_kwargs["connect_timeout"] = 15
+            conn = psycopg2.connect(self.database_url, **connect_kwargs)
             try:
                 yield conn
                 conn.commit()

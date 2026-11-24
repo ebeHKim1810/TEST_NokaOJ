@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.app.core.audit import record_audit_log
 from backend.app.core.database import Database, get_db
+from backend.app.core.queue import judge_execution_slot
 from backend.app.core.security import get_client_ip, is_admin, require_roles
 from backend.app.core.storage import BaseStorage, get_storage
 from backend.app.schemas.schemas import GenerateTestcasesRequest, SaveGeneratedBatchRequest
@@ -49,22 +50,23 @@ def generate_testcases(
         raise HTTPException(status_code=403, detail="Permission denied.")
 
     engine = TestcaseGeneratorEngine()
-    report = engine.generate(
-        mode=payload.mode,
-        reference_code=payload.reference_code,
-        reference_language=payload.reference_language,
-        num_tests=payload.num_tests,
-        time_limit_ms=payload.time_limit_ms,
-        memory_limit_mb=payload.memory_limit_mb,
-        seed=payload.seed,
-        generator_code=payload.generator_code,
-        generator_language=payload.generator_language,
-        constraint_schema=payload.constraint_schema,
-        template_id=payload.template_id,
-        template_params=payload.template_params,
-        profile_distribution=payload.profile_distribution,
-        allow_empty_output=payload.allow_empty_output,
-    )
+    with judge_execution_slot():
+        report = engine.generate(
+            mode=payload.mode,
+            reference_code=payload.reference_code,
+            reference_language=payload.reference_language,
+            num_tests=payload.num_tests,
+            time_limit_ms=payload.time_limit_ms,
+            memory_limit_mb=payload.memory_limit_mb,
+            seed=payload.seed,
+            generator_code=payload.generator_code,
+            generator_language=payload.generator_language,
+            constraint_schema=payload.constraint_schema,
+            template_id=payload.template_id,
+            template_params=payload.template_params,
+            profile_distribution=payload.profile_distribution,
+            allow_empty_output=payload.allow_empty_output,
+        )
 
     batch_id = uuid.uuid4().hex
     report_dict = report.to_dict()
