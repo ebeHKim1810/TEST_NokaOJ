@@ -21,18 +21,26 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(`${BRAND_CONFIG.apiBaseUrl}${path}`, {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const url = `${BRAND_CONFIG.apiBaseUrl}${normalizedPath}`;
+
+  const res = await fetch(url, {
     ...options,
     headers,
   });
 
   if (!res.ok) {
     let msg = `Request failed (${res.status})`;
+    let hasApiDetail = false;
     try {
       const data = await res.json();
-      if (typeof data.detail === 'string') msg = data.detail;
-      else if (data.detail?.message) msg = data.detail.message;
-      else if (Array.isArray(data.detail) && data.detail.length > 0) {
+      if (typeof data.detail === 'string') {
+        msg = data.detail;
+        hasApiDetail = true;
+      } else if (data.detail?.message) {
+        msg = data.detail.message;
+        hasApiDetail = true;
+      } else if (Array.isArray(data.detail) && data.detail.length > 0) {
         // FastAPI/Pydantic validation errors (422)
         msg = data.detail
           .map((d: any) => {
@@ -40,9 +48,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
             return loc ? `${loc}: ${d?.msg ?? ''}` : String(d?.msg ?? '');
           })
           .join('; ');
+        hasApiDetail = true;
       }
     } catch {
-      // ignore
+      // Non-JSON response (e.g. static host 404 when Backend URL is not configured)
+    }
+    if (!hasApiDetail && res.status === 404 && BRAND_CONFIG.apiBaseUrl.startsWith('/')) {
+      msg = `Không tìm thấy API Backend (404 tại ${url}). Hãy kiểm tra Backend đã được deploy online và cấu hình biến môi trường VITE_API_BASE_URL trên Vercel.`;
     }
     throw new Error(msg);
   }
