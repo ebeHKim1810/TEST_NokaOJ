@@ -164,8 +164,9 @@ def save_generated_batch_to_problem(
         raise HTTPException(status_code=403, detail="Permission denied.")
 
     # Never overwrite existing testcases; append cleanly after current highest order_index
-    cnt_row = db.fetchone("SELECT COUNT(*) AS cnt FROM testcases WHERE problem_id = %s", (payload.problem_id,))
-    base_idx = int(cnt_row["cnt"]) if cnt_row else 0
+    existing_rows = db.fetchall("SELECT name FROM testcases WHERE problem_id = %s", (payload.problem_id,))
+    existing_names = {str(r["name"]) for r in existing_rows}
+    base_idx = len(existing_rows)
 
     selected_set = set(payload.selected_indices)
     saved = []
@@ -175,7 +176,15 @@ def save_generated_batch_to_problem(
         base_idx += 1
         in_b = item["input_data"].encode("utf-8")
         out_b = item["expected_output"].encode("utf-8")
-        name = f"gen_{base_idx:02d}"
+        raw_name = str(item.get("name") or "").strip()[:64]
+        if batch.get("mode") == "custom_generator" and raw_name and raw_name not in existing_names:
+            name = raw_name
+        else:
+            name = f"gen_{base_idx:02d}"
+            while name in existing_names:
+                base_idx += 1
+                name = f"gen_{base_idx:02d}"
+        existing_names.add(name)
         tc_id = db.insert_returning_id(
             """
             INSERT INTO testcases (

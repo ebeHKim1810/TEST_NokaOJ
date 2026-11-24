@@ -1,9 +1,85 @@
 import React, { useEffect, useState } from 'react';
-import { Play, Download, Save, Upload, CheckSquare, Square } from 'lucide-react';
+import { Play, Download, Save, Upload, CheckSquare, Square, RotateCcw, Info } from 'lucide-react';
 import { api } from '../../services/api';
 import { useApp } from '../../stores/AppContext';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { GenerationBatchResponse, LanguageId } from '../../types';
+
+const DEFAULT_CPP_GENERATOR = `#include <bits/stdc++.h>
+using namespace std;
+
+mt19937_64 rng(chrono::steady_clock::now().time_since_epoch().count());
+long long randInt(long long l, long long r) {
+    return uniform_int_distribution<long long>(l, r)(rng);
+}
+
+int main(int argc, char* argv[]) {
+    int T = (argc > 1) ? stoi(argv[1]) : 10; // Tổng số test nhập từ giao diện
+
+    for (int t = 1; t <= T; t++) {
+        // Tạo tên file test_01.in, test_02.in, ...
+        char filename[32];
+        sprintf(filename, "test_%02d.in", t);
+        ofstream out(filename);
+
+        // Điều chỉnh thông số input theo từng Subtask tại đây:
+        int n;
+        if (t <= T * 0.4) {
+            n = randInt(1, 20);        // Subtask 1 (40% test đầu): N nhỏ
+        } else if (t <= T * 0.7) {
+            n = randInt(100, 1000);    // Subtask 2 (30% test tiếp): N trung bình
+        } else {
+            n = randInt(50000, 100000);// Subtask 3 (30% test cuối): N lớn
+        }
+
+        out << n << "\\n";
+        for (int i = 0; i < n; i++) {
+            out << randInt(1, 1000000) << (i + 1 == n ? "" : " ");
+        }
+        out << "\\n";
+        out.close();
+    }
+    return 0;
+}
+`;
+
+const DEFAULT_PYTHON_GENERATOR = `import sys
+import random
+
+def main():
+    T = int(sys.argv[1]) if len(sys.argv) > 1 else 10
+
+    for t in range(1, T + 1):
+        filename = f"test_{t:02d}.in"
+        with open(filename, "w", encoding="utf-8") as f:
+            # Điều chỉnh thông số input theo từng Subtask tại đây:
+            if t <= int(T * 0.4):
+                n = random.randint(1, 20)          # Subtask 1
+            elif t <= int(T * 0.7):
+                n = random.randint(100, 1000)      # Subtask 2
+            else:
+                n = random.randint(50000, 100000)  # Subtask 3
+
+            arr = [random.randint(1, 10**6) for _ in range(n)]
+            f.write(f"{n}\\n")
+            f.write(" ".join(map(str, arr)) + "\\n")
+
+if __name__ == "__main__":
+    main()
+`;
+
+function getDefaultGeneratorTemplate(lang: LanguageId): string {
+  return lang === 'python3' ? DEFAULT_PYTHON_GENERATOR : DEFAULT_CPP_GENERATOR;
+}
+
+function isBuiltInDefaultTemplate(code: string): boolean {
+  const trimmed = code.trim();
+  return (
+    trimmed === '' ||
+    trimmed === DEFAULT_CPP_GENERATOR.trim() ||
+    trimmed === DEFAULT_PYTHON_GENERATOR.trim()
+  );
+}
 
 interface Props {
   problemId: number;
@@ -15,10 +91,8 @@ export const TestcaseGeneratorPanel: React.FC<Props> = ({ problemId, onSaved }) 
   const [mode, setMode] = useState<'custom_generator' | 'constraints' | 'builtin_template'>('custom_generator');
   const [refLang, setRefLang] = useState<LanguageId>('cpp17');
   const [refCode, setRefCode] = useState('');
-  const [genLang, setGenLang] = useState<LanguageId>('python3');
-  const [genCode, setGenCode] = useState(
-    `import random, sys\ntest_idx = int(sys.argv[1]) if len(sys.argv) > 1 else 1\nseed = int(sys.argv[2]) if len(sys.argv) > 2 else 42\nrng = random.Random(seed)\na = rng.randint(1, 1000 * test_idx)\nb = rng.randint(1, 1000 * test_idx)\nprint(a, b)\n`
-  );
+  const [genLang, setGenLang] = useState<LanguageId>('cpp17');
+  const [genCode, setGenCode] = useState(DEFAULT_CPP_GENERATOR);
   const [numTests, setNumTests] = useState(10);
   const [timeLimitMs, setTimeLimitMs] = useState(2000);
   const [memoryLimitMb, setMemoryLimitMb] = useState(256);
@@ -58,6 +132,13 @@ export const TestcaseGeneratorPanel: React.FC<Props> = ({ problemId, onSaved }) 
       .catch(() => {});
   }, []);
 
+  const handleGenLangChange = (nextLang: LanguageId) => {
+    setGenLang(nextLang);
+    if (isBuiltInDefaultTemplate(genCode)) {
+      setGenCode(getDefaultGeneratorTemplate(nextLang));
+    }
+  };
+
   const readFileTo = (setter: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -70,6 +151,10 @@ export const TestcaseGeneratorPanel: React.FC<Props> = ({ problemId, onSaved }) 
   const handleGenerate = async () => {
     if (!refCode.trim()) {
       toast('Vui lòng nhập hoặc tải lên mã nguồn lời giải AC (Reference Solution).', 'warning');
+      return;
+    }
+    if (mode === 'custom_generator' && !genCode.trim()) {
+      toast('Vui lòng nhập mã nguồn Generator (Mode A).', 'warning');
       return;
     }
     setGenerating(true);
@@ -100,7 +185,9 @@ export const TestcaseGeneratorPanel: React.FC<Props> = ({ problemId, onSaved }) 
       setBatch(res);
       setSelected(res.items.filter((i) => i.status === 'SUCCESS').map((i) => i.index));
       if (res.reference_compile_error || res.generator_compile_error) {
-        toast('Biên dịch thất bại. Kiểm tra thông báo lỗi bên dưới.', 'error');
+        toast('Sinh test thất bại. Kiểm tra thông báo lỗi bên dưới.', 'error');
+      } else if (res.success_count === 0) {
+        toast('Không có testcase nào thành công. Kiểm tra chi tiết lỗi ở bảng bên dưới.', 'warning');
       } else {
         toast(`Sinh hoàn tất: ${res.success_count}/${res.requested_count} testcase thành công.`, 'success');
       }
@@ -121,7 +208,7 @@ export const TestcaseGeneratorPanel: React.FC<Props> = ({ problemId, onSaved }) 
         is_hidden: true,
         confirmed: true,
       });
-      toast(`Đã lưu ${res.saved_count} testcase vào bài tập (không ghi đè test cũ).`, 'success');
+      toast(`Đã lưu ${res.saved_count} testcase lên Cloudflare R2 & bài tập (không ghi đè test cũ).`, 'success');
       onSaved();
     } catch (err: any) {
       toast(err.message, 'error');
@@ -137,9 +224,21 @@ export const TestcaseGeneratorPanel: React.FC<Props> = ({ problemId, onSaved }) 
       {/* Mode selector */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
         {[
-          { id: 'custom_generator', label: 'Mode A: Custom Generator', desc: 'Nhập code Generator + code AC (chính xác & linh hoạt nhất).' },
-          { id: 'constraints', label: 'Mode B: Constraints Schema', desc: 'Cấu hình cấu trúc ràng buộc + Validator + code AC.' },
-          { id: 'builtin_template', label: 'Mode C: Built-in Templates', desc: '11 mẫu dữ liệu có sẵn + phân bố biên & đặc biệt.' },
+          {
+            id: 'custom_generator',
+            label: 'Mode A: Custom Generator (Vòng lặp Subtask)',
+            desc: 'Chạy Generator 1 lần sinh toàn bộ test_*.in theo Subtask + lời giải AC sinh .out.',
+          },
+          {
+            id: 'constraints',
+            label: 'Mode B: Constraints Schema',
+            desc: 'Cấu hình cấu trúc ràng buộc + Validator + code AC.',
+          },
+          {
+            id: 'builtin_template',
+            label: 'Mode C: Built-in Templates',
+            desc: '11 mẫu dữ liệu có sẵn + phân bố biên & đặc biệt.',
+          },
         ].map((m) => (
           <button
             key={m.id}
@@ -160,11 +259,11 @@ export const TestcaseGeneratorPanel: React.FC<Props> = ({ problemId, onSaved }) 
       {/* Common Settings */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div>
-          <label className="block text-xs font-medium text-zinc-500 mb-1">Số lượng test</label>
+          <label className="block text-xs font-medium text-zinc-500 mb-1">Số lượng test (T)</label>
           <input type="number" min={1} max={100} value={numTests} onChange={(e) => setNumTests(Number(e.target.value))} className="noka-input font-mono" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-zinc-500 mb-1">Time Limit (ms)</label>
+          <label className="block text-xs font-medium text-zinc-500 mb-1">Time Limit mỗi test (ms)</label>
           <input type="number" min={100} max={15000} value={timeLimitMs} onChange={(e) => setTimeLimitMs(Number(e.target.value))} className="noka-input font-mono" />
         </div>
         <div>
@@ -195,10 +294,11 @@ export const TestcaseGeneratorPanel: React.FC<Props> = ({ problemId, onSaved }) 
         </div>
         <textarea
           rows={8}
+          spellCheck={false}
           value={refCode}
           onChange={(e) => setRefCode(e.target.value)}
-          placeholder="Dán mã nguồn lời giải AC chạy trong sandbox để sinh Expected Output..."
-          className="noka-input font-mono text-xs"
+          placeholder="Dán mã nguồn lời giải AC chạy trong sandbox để sinh Expected Output (.out)..."
+          className="noka-input font-mono text-xs leading-relaxed"
         />
       </div>
 
@@ -206,24 +306,54 @@ export const TestcaseGeneratorPanel: React.FC<Props> = ({ problemId, onSaved }) 
       {mode === 'custom_generator' && (
         <div className="noka-section p-4 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="text-sm font-medium">2. Mã nguồn Generator (Mode A — nhận argv[1]=test_idx, argv[2]=seed)</div>
-            <div className="flex items-center gap-2">
-              <select value={genLang} onChange={(e) => setGenLang(e.target.value as LanguageId)} className="noka-input w-auto text-xs font-mono">
-                <option value="python3">Python 3</option>
+            <div className="text-sm font-medium">
+              2. Mã nguồn Generator (Mode A — chạy 1 lần, nhận <code className="font-mono text-xs">argv[1]=T</code>)
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={genLang}
+                onChange={(e) => handleGenLangChange(e.target.value as LanguageId)}
+                className="noka-input w-auto text-xs font-mono"
+              >
                 <option value="cpp17">C++17</option>
                 <option value="cpp20">C++20</option>
+                <option value="python3">Python 3</option>
               </select>
+              <button
+                type="button"
+                onClick={() => setGenCode(getDefaultGeneratorTemplate(genLang))}
+                title="Khôi phục code mẫu chia Subtask theo ngôn ngữ đang chọn"
+                className="noka-btn-secondary text-xs"
+              >
+                <RotateCcw className="h-3.5 w-3.5" /> Code mẫu
+              </button>
               <label className="noka-btn-secondary text-xs cursor-pointer">
                 <Upload className="h-3.5 w-3.5" /> Tải file generator
                 <input type="file" onChange={readFileTo(setGenCode)} className="hidden" />
               </label>
             </div>
           </div>
+
+          <div className="rounded border border-[#2A5C99]/20 dark:border-[#89B4E8]/25 bg-[#2A5C99]/[0.04] dark:bg-[#89B4E8]/[0.07] px-3 py-2 text-xs text-zinc-600 dark:text-zinc-300 flex items-start gap-2">
+            <Info className="h-4 w-4 shrink-0 mt-0.5 text-[#2A5C99] dark:text-[#89B4E8]" />
+            <span>
+              Số lượng test (<code className="font-mono font-semibold">T</code>) được truyền qua{' '}
+              <code className="font-mono font-semibold">argv[1]</code> (seed qua{' '}
+              <code className="font-mono">argv[2]</code>). Code của bạn cần lặp{' '}
+              <code className="font-mono">t</code> từ <code className="font-mono">1</code> đến{' '}
+              <code className="font-mono">T</code> và xuất ra các file{' '}
+              <code className="font-mono font-semibold">test_01.in</code>,{' '}
+              <code className="font-mono font-semibold">test_02.in</code>... để{' '}
+              <strong>Reference Solution</strong> tự động sinh file <code className="font-mono">.out</code> tương ứng.
+            </span>
+          </div>
+
           <textarea
-            rows={7}
+            rows={16}
+            spellCheck={false}
             value={genCode}
             onChange={(e) => setGenCode(e.target.value)}
-            className="noka-input font-mono text-xs"
+            className="noka-input font-mono text-xs leading-relaxed"
           />
         </div>
       )}
@@ -233,6 +363,7 @@ export const TestcaseGeneratorPanel: React.FC<Props> = ({ problemId, onSaved }) 
           <div className="text-sm font-medium">2. Cấu trúc ràng buộc Input & Validator (Mode B JSON Schema)</div>
           <textarea
             rows={8}
+            spellCheck={false}
             value={schemaJson}
             onChange={(e) => setSchemaJson(e.target.value)}
             className="noka-input font-mono text-xs"
@@ -294,7 +425,7 @@ export const TestcaseGeneratorPanel: React.FC<Props> = ({ problemId, onSaved }) 
             <div className="space-y-0.5">
               <h3 className="text-sm font-semibold">Testcase Review (Seed: {batch.seed})</h3>
               <p className="text-xs font-mono text-zinc-500">
-                Yêu cầu: {batch.requested_count} · Thành công: {batch.success_count} · Thất bại: {batch.failed_count} · Thời gian: {batch.duration_ms} ms
+                Tổng test: {batch.requested_count} · Thành công: {batch.success_count} · Thất bại: {batch.failed_count} · Thời gian: {batch.duration_ms} ms
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -317,75 +448,77 @@ export const TestcaseGeneratorPanel: React.FC<Props> = ({ problemId, onSaved }) 
           </div>
 
           {(batch.reference_compile_error || batch.generator_compile_error) && (
-            <pre className="rounded bg-[#FDF0F4] dark:bg-[#29151C] p-3 text-xs text-[#9B3558] dark:text-[#F1B4C8] overflow-x-auto">
+            <pre className="rounded bg-[#FDF0F4] dark:bg-[#29151C] p-3 text-xs text-[#9B3558] dark:text-[#F1B4C8] overflow-x-auto whitespace-pre-wrap">
               {batch.reference_compile_error || batch.generator_compile_error}
             </pre>
           )}
 
-          <div className="overflow-x-auto">
-            <table className="noka-table text-xs">
-              <thead>
-                <tr>
-                  <th className="w-10">Chọn</th>
-                  <th>Test</th>
-                  <th>Nhóm</th>
-                  <th>Trạng thái</th>
-                  <th>Input Preview</th>
-                  <th>Expected Output Preview</th>
-                  <th className="text-right">Dung lượng</th>
-                </tr>
-              </thead>
-              <tbody>
-                {batch.items.map((item) => {
-                  const isSel = selected.includes(item.index);
-                  return (
-                    <tr key={item.index}>
-                      <td>
-                        {item.status === 'SUCCESS' && (
-                          <button type="button" onClick={() => toggleSelect(item.index)} className="text-[#2A5C99] dark:text-[#89B4E8]">
-                            {isSel ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4 text-zinc-400" />}
-                          </button>
-                        )}
-                      </td>
-                      <td className="font-mono">{item.name}</td>
-                      <td className="font-mono text-zinc-500">{item.profile}</td>
-                      <td>
-                        <span
-                          className={`rounded px-1.5 py-0.5 font-mono text-[11px] ${
-                            item.status === 'SUCCESS'
-                              ? 'bg-[#EBF7F0] text-[#1F6F45] dark:bg-[#84CBA3]/15 dark:text-[#98DFB5]'
-                              : 'bg-[#FDF0F4] text-[#9B3558] dark:bg-[#E59CB4]/15 dark:text-[#F1B4C8]'
-                          }`}
-                        >
-                          {item.status}
-                        </span>
-                      </td>
-                      <td>
-                        <pre className="max-w-xs truncate font-mono text-[11px] text-zinc-600 dark:text-zinc-400">
-                          {item.error || item.input_preview}
-                        </pre>
-                      </td>
-                      <td>
-                        <pre className="max-w-xs truncate font-mono text-[11px] text-zinc-600 dark:text-zinc-400">
-                          {item.output_preview || '—'}
-                        </pre>
-                      </td>
-                      <td className="text-right font-mono text-zinc-500">
-                        {item.input_size_bytes}B / {item.output_size_bytes}B
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          {batch.items.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="noka-table text-xs">
+                <thead>
+                  <tr>
+                    <th className="w-10">Chọn</th>
+                    <th>Test</th>
+                    <th>Nhóm</th>
+                    <th>Trạng thái</th>
+                    <th>Input Preview</th>
+                    <th>Expected Output Preview</th>
+                    <th className="text-right">Dung lượng</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {batch.items.map((item) => {
+                    const isSel = selected.includes(item.index);
+                    return (
+                      <tr key={item.index}>
+                        <td>
+                          {item.status === 'SUCCESS' && (
+                            <button type="button" onClick={() => toggleSelect(item.index)} className="text-[#2A5C99] dark:text-[#89B4E8]">
+                              {isSel ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4 text-zinc-400" />}
+                            </button>
+                          )}
+                        </td>
+                        <td className="font-mono">{item.name}</td>
+                        <td className="font-mono text-zinc-500">{item.profile}</td>
+                        <td>
+                          <span
+                            className={`rounded px-1.5 py-0.5 font-mono text-[11px] ${
+                              item.status === 'SUCCESS'
+                                ? 'bg-[#EBF7F0] text-[#1F6F45] dark:bg-[#84CBA3]/15 dark:text-[#98DFB5]'
+                                : 'bg-[#FDF0F4] text-[#9B3558] dark:bg-[#E59CB4]/15 dark:text-[#F1B4C8]'
+                            }`}
+                          >
+                            {item.status}
+                          </span>
+                        </td>
+                        <td>
+                          <pre className="max-w-xs truncate font-mono text-[11px] text-zinc-600 dark:text-zinc-400" title={item.error || item.input_preview}>
+                            {item.error || item.input_preview}
+                          </pre>
+                        </td>
+                        <td>
+                          <pre className="max-w-xs truncate font-mono text-[11px] text-zinc-600 dark:text-zinc-400">
+                            {item.output_preview || '—'}
+                          </pre>
+                        </td>
+                        <td className="text-right font-mono text-zinc-500">
+                          {item.input_size_bytes}B / {item.output_size_bytes}B
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
       <ConfirmDialog
         open={confirmSave}
         title="Xác nhận lưu Testcase vào bài tập"
-        description={`Bạn có chắc muốn thêm ${selected.length} testcase đã chọn vào bài tập này? Các testcase hiện có sẽ được giữ nguyên và không bị ghi đè.`}
+        description={`Bạn có chắc muốn thêm ${selected.length} testcase đã chọn lên Cloudflare R2 và lưu vào bài tập này? Các testcase hiện có sẽ được giữ nguyên và không bị ghi đè.`}
         confirmLabel="Lưu vào bài tập"
         onConfirm={handleConfirmSave}
         onCancel={() => setConfirmSave(false)}

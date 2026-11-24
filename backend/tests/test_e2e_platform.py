@@ -126,9 +126,17 @@ class TestNokaJudgeEndToEnd(unittest.TestCase):
         self.assertEqual(r_zip.json()["imported_count"], 1)
         self.assertTrue(any("03.in" in w for w in r_zip.json()["warnings"]))
 
-        # 6. Advanced Testcase Generator (Mode A: Custom Generator + AC Solution) -> Preview -> Save Selected
+        # 6. Advanced Testcase Generator (Mode A: Batch Loop Custom Generator + AC Solution) -> Preview -> Save Selected
         ref_cpp = "#include <iostream>\nusing namespace std;\nint main(){ long long a,b; cin>>a>>b; cout<<a+b<<'\\n'; }\n"
-        gen_py = "import random, sys\nr=random.Random(int(sys.argv[2]))\nprint(r.randint(1,500), r.randint(1,500))\n"
+        gen_py = (
+            "import random, sys\n"
+            "T = int(sys.argv[1]) if len(sys.argv) > 1 else 3\n"
+            "seed = int(sys.argv[2]) if len(sys.argv) > 2 else 42\n"
+            "r = random.Random(seed)\n"
+            "for t in range(1, T + 1):\n"
+            "    with open(f'test_{t:02d}.in', 'w', encoding='utf-8') as f:\n"
+            "        f.write(f'{r.randint(1, 500)} {r.randint(1, 500)}\\n')\n"
+        )
         r_gen = self.client.post(
             "/api/v1/testcase-generator/generate",
             headers=admin_h,

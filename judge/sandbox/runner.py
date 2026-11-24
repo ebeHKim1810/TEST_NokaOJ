@@ -127,11 +127,17 @@ class SandboxRunner:
         time_limit_ms: int = 1000,
         memory_limit_mb: int = 256,
         args: Optional[List[str]] = None,
+        writable_work_dir: bool = False,
     ) -> ExecutionResult:
         full_cmd = list(cmd) + (args or [])
         if self.mode == "docker" and shutil.which("docker"):
             return self._run_docker(
-                full_cmd, work_dir, stdin_data, time_limit_ms, memory_limit_mb
+                full_cmd,
+                work_dir,
+                stdin_data,
+                time_limit_ms,
+                memory_limit_mb,
+                writable_work_dir=writable_work_dir,
             )
         return self._run_local_posix(
             full_cmd, work_dir, stdin_data, time_limit_ms, memory_limit_mb
@@ -144,12 +150,14 @@ class SandboxRunner:
         stdin_data: str,
         time_limit_ms: int,
         memory_limit_mb: int,
+        writable_work_dir: bool = False,
     ) -> ExecutionResult:
         container_name = f"noka-sbx-{os.getpid()}-{int(time.time() * 1000000)}"
         mapped_cmd = [
             part.replace(work_dir, "/work") if work_dir in part else part
             for part in cmd
         ]
+        mount_mode = "rw" if writable_work_dir else "ro"
         docker_cmd = [
             "docker",
             "run",
@@ -170,7 +178,7 @@ class SandboxRunner:
             f"--memory-swap={memory_limit_mb}m",
             "--pids-limit=64",
             "-v",
-            f"{work_dir}:/work:ro",
+            f"{work_dir}:/work:{mount_mode}",
             "-w",
             "/work",
             "-i",
