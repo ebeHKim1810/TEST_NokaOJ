@@ -27,6 +27,10 @@ class Settings(BaseModel):
     rate_limit_requests_per_minute: int
     submit_rate_limit_per_minute: int
     max_upload_size_mb: int
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
 
     @property
     def cors_origin_list(self) -> List[str]:
@@ -66,4 +70,8 @@ def get_settings() -> Settings:
         rate_limit_requests_per_minute=int(os.getenv("RATE_LIMIT_REQUESTS_PER_MINUTE", "240")),
         submit_rate_limit_per_minute=int(os.getenv("SUBMIT_RATE_LIMIT_PER_MINUTE", "30")),
         max_upload_size_mb=int(os.getenv("MAX_UPLOAD_SIZE_MB", "50")),
+        gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash",
+        openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
     )

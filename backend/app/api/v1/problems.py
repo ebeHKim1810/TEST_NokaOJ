@@ -28,6 +28,10 @@ from backend.app.schemas.schemas import (
     ProblemCreateRequest,
     ProblemUpdateRequest,
 )
+from backend.app.services.problem_auto_import import (
+    MAX_AUTO_IMPORT_BYTES,
+    auto_import_problem_from_bytes,
+)
 
 router = APIRouter(prefix="/problems", tags=["Problems"])
 
@@ -177,6 +181,45 @@ async def upload_problem_image(
         "size_bytes": len(data),
         "content_type": canonical_mime,
     }
+
+
+@router.post("/auto-import")
+async def auto_import_problem(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_roles("admin", "teacher")),
+    db: Database = Depends(get_db),
+):
+    """
+    Zero-disk, zero-storage AI auto-import endpoint for Admin/Teachers.
+    Reads .docx, .pdf, or image (.png/.jpg/.jpeg/.webp) strictly in RAM (max 10MB),
+    extracts structured Markdown + LaTeX JSON via Gemini API (or OpenAI fallback),
+    and immediately releases memory without saving anything to disk or Cloudflare R2.
+    """
+    data = await file.read(MAX_AUTO_IMPORT_BYTES + 1)
+    filename = file.filename or "upload"
+    content_type = file.content_type or ""
+    try:
+        parsed, provider = await auto_import_problem_from_bytes(
+            data=data,
+            filename=filename,
+            content_type=content_type,
+        )
+    finally:
+        # Release uploaded file buffer immediately (Zero Disk / Zero R2 footprint)
+        await file.close()
+        del data
+
+    record_audit_log(
+        db,
+        current_user["id"],
+        "problem.auto_import",
+        "problem",
+        "auto_import",
+        get_client_ip(request),
+        {"filename": filename[:120], "provider": provider},
+    )
+    return parsed
 
 
 @router.get("/images/{filename}")

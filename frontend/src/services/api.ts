@@ -192,6 +192,25 @@ export const api = {
       body: fd,
     });
   },
+  autoImportProblem: (file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return request<{
+      title: string;
+      description: string;
+      input_description: string;
+      output_description: string;
+      constraints: string;
+      sample_input: string;
+      sample_output: string;
+      explanation: string;
+      time_limit_ms: number;
+      memory_limit_mb: number;
+    }>('/problems/auto-import', {
+      method: 'POST',
+      body: fd,
+    });
+  },
 
   // Testcases
   listTestcases: (problemId: number) => request<any>(`/testcases/problem/${problemId}`),

@@ -61,6 +61,19 @@ export interface ProblemDetail extends ProblemSummary {
   block_old_code?: boolean;
 }
 
+export interface AutoImportProblemResult {
+  title: string;
+  description: string;
+  input_description: string;
+  output_description: string;
+  constraints: string;
+  sample_input: string;
+  sample_output: string;
+  explanation: string;
+  time_limit_ms: number;
+  memory_limit_mb: number;
+}
+
 export interface TestcaseGroup {
   id: number;
   problem_id: number;

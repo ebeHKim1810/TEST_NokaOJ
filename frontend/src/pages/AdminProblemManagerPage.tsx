@@ -5,9 +5,17 @@ import { api } from '../services/api';
 import { useApp } from '../stores/AppContext';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ProblemAccessPicker } from '../components/ProblemAccessPicker';
+import { ProblemAutoImportBox } from '../components/ProblemAutoImportBox';
 import { RichMarkdownField } from '../components/RichMarkdownToolbar';
 import { TestcaseGeneratorPanel } from '../features/testcase-generator/TestcaseGeneratorPanel';
-import { AllowedUserItem, SubmissionRetentionMode, TestcaseGroup, TestcaseItem, Visibility } from '../types';
+import {
+  AllowedUserItem,
+  AutoImportProblemResult,
+  SubmissionRetentionMode,
+  TestcaseGroup,
+  TestcaseItem,
+  Visibility,
+} from '../types';
 
 const CHECKER_TEMPLATES: Record<'python3' | 'cpp17' | 'cpp20', string> = {
   python3: `import sys
@@ -139,6 +147,28 @@ export const AdminProblemManagerPage: React.FC = () => {
       });
     }
   }, [id, isNew]);
+
+  const handleAutoImported = (data: AutoImportProblemResult) => {
+    setForm((prev) => ({
+      ...prev,
+      title: data.title?.trim() ? data.title : prev.title,
+      statement_md: data.description?.trim() ? data.description : prev.statement_md,
+      input_description: data.input_description?.trim() ? data.input_description : prev.input_description,
+      output_description: data.output_description?.trim() ? data.output_description : prev.output_description,
+      constraints_md: data.constraints?.trim() ? data.constraints : prev.constraints_md,
+      sample_input: data.sample_input?.trim() ? data.sample_input : prev.sample_input,
+      sample_output: data.sample_output?.trim() ? data.sample_output : prev.sample_output,
+      explanation: data.explanation?.trim() ? data.explanation : prev.explanation,
+      time_limit_ms:
+        typeof data.time_limit_ms === 'number' && data.time_limit_ms >= 100
+          ? data.time_limit_ms
+          : prev.time_limit_ms,
+      memory_limit_mb:
+        typeof data.memory_limit_mb === 'number' && data.memory_limit_mb >= 16
+          ? data.memory_limit_mb
+          : prev.memory_limit_mb,
+    }));
+  };
 
   const handleSaveProblem = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -282,6 +312,8 @@ export const AdminProblemManagerPage: React.FC = () => {
 
       {tab === 'info' && (
         <form onSubmit={handleSaveProblem} className="space-y-4">
+          <ProblemAutoImportBox onImported={handleAutoImported} disabled={saving} />
+
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div>
               <label className="block text-xs font-medium text-zinc-500 mb-1">Mã bài (để trống sẽ tự sinh)</label>
