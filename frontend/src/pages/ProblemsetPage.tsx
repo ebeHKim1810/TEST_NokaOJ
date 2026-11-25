@@ -8,6 +8,7 @@ import {
   Save,
   Search,
   Settings2,
+  Trash2,
   Users,
   X,
 } from 'lucide-react';
@@ -15,6 +16,7 @@ import { api } from '../services/api';
 import { useApp } from '../stores/AppContext';
 import { DifficultyBadge, VisibilityBadge } from '../components/StatusBadge';
 import { ProblemAccessPicker } from '../components/ProblemAccessPicker';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import {
   AllowedUserItem,
   ProblemSummary,
@@ -23,8 +25,10 @@ import {
 } from '../types';
 
 export const ProblemsetPage: React.FC = () => {
-  const { isStaff, toast } = useApp();
+  const { user, isStaff, toast } = useApp();
   const [items, setItems] = useState<ProblemSummary[]>([]);
+  const [deleteTarget, setDeleteTarget] = useState<ProblemSummary | null>(null);
+  const [deletingProblem, setDeletingProblem] = useState(false);
   const [total, setTotal] = useState(0);
   const [tags, setTags] = useState<Array<{ id: number; name: string; slug: string }>>([]);
   const [loading, setLoading] = useState(true);
@@ -168,6 +172,32 @@ export const ProblemsetPage: React.FC = () => {
       toast(err.message || 'Lỗi khi lưu cấu hình phân quyền.', 'error');
     } finally {
       setSavingAccess(false);
+    }
+  };
+
+  const canDeleteProblem = (p: ProblemSummary) =>
+    Boolean(
+      user &&
+        (user.roles.includes('admin') ||
+          (isStaff && (!p.created_by || Number(p.created_by) === Number(user.id))))
+    );
+
+  const handleConfirmDeleteProblem = async () => {
+    if (!deleteTarget) return;
+    setDeletingProblem(true);
+    try {
+      const res = await api.deleteProblem(deleteTarget.id);
+      setItems((prev) => prev.filter((item) => item.id !== deleteTarget.id));
+      setTotal((t) => Math.max(0, t - 1));
+      toast(
+        `Đã xóa vĩnh viễn bài tập ${deleteTarget.code} (${res.deleted_testcases ?? 0} testcase, ${res.deleted_submissions ?? 0} bài nộp, ${res.deleted_storage_files ?? 0} file R2).`,
+        'success'
+      );
+      setDeleteTarget(null);
+    } catch (err: any) {
+      toast(err.message || 'Không thể xóa bài tập.', 'error');
+    } finally {
+      setDeletingProblem(false);
     }
   };
 
@@ -413,6 +443,16 @@ export const ProblemsetPage: React.FC = () => {
                         Sửa
                       </Link>
                     )}
+                    {canDeleteProblem(p) && (
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget(p)}
+                        title={`Xóa vĩnh viễn bài tập ${p.code}`}
+                        className="inline-flex items-center justify-center rounded p-1 text-zinc-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40 dark:hover:text-rose-400 align-middle"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -537,6 +577,19 @@ export const ProblemsetPage: React.FC = () => {
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        title={`Xóa vĩnh viễn bài tập ${deleteTarget?.code ?? ''}?`}
+        description={
+          deleteTarget
+            ? `Bài tập "${deleteTarget.title}" cùng toàn bộ test case, ảnh đính kèm và lịch sử nộp bài sẽ bị xóa vĩnh viễn khỏi hệ thống (Neon PostgreSQL & Cloudflare R2) để giải phóng bộ nhớ. Hành động này không thể hoàn tác!`
+            : ''
+        }
+        confirmLabel={deletingProblem ? 'Đang xóa...' : 'Xóa vĩnh viễn'}
+        danger
+        onConfirm={handleConfirmDeleteProblem}
+        onCancel={() => !deletingProblem && setDeleteTarget(null)}
+      />
     </div>
   );
 };

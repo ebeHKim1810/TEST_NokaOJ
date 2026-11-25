@@ -1,13 +1,20 @@
 """Problemset & Problem CRUD API routes (/api/v1/problems)."""
+import json
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 
 from backend.app.core.audit import record_audit_log
-from backend.app.core.cache import app_cache, invalidate_problem_caches
+from backend.app.core.cache import (
+    app_cache,
+    invalidate_contest_caches,
+    invalidate_problem_caches,
+    invalidate_submission_caches,
+)
 from backend.app.core.contest_access import can_access_contest, get_active_code_blocking_contests
 from backend.app.core.database import Database, get_db
 from backend.app.core.problem_access import (
@@ -34,6 +41,95 @@ from backend.app.services.problem_auto_import import (
 )
 
 router = APIRouter(prefix="/problems", tags=["Problems"])
+logger = logging.getLogger("noka.problems")
+
+PROBLEM_IMAGE_REF_RE = re.compile(
+    r"(?:/api/v1/problems/images/|problem-images/)([a-f0-9]{16,64}\.(?:png|jpg|jpeg|webp|gif))",
+    flags=re.IGNORECASE,
+)
+
+
+def _parse_samples_json(raw: Any) -> List[Dict[str, str]]:
+    """Decodes problems.samples from PostgreSQL JSONB (list) or SQLite TEXT (str)."""
+    if raw is None:
+        return []
+    parsed = raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return []
+        try:
+            parsed = json.loads(s)
+        except Exception:
+            return []
+    if not isinstance(parsed, list):
+        return []
+    out: List[Dict[str, str]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        inp = str(item.get("input") or "")
+        outp = str(item.get("output") or "")
+        exp = str(item.get("explanation") or "")
+        out.append({"input": inp, "output": outp, "explanation": exp})
+    return out
+
+
+def _resolve_problem_samples(prob: Dict[str, Any]) -> List[Dict[str, str]]:
+    """
+    Returns the normalized list of problem examples.
+    Backward compatibility: if `samples` is empty while legacy `sample_input`/`sample_output`
+    contain data, automatically maps them into Example 1.
+    """
+    items = _parse_samples_json(prob.get("samples"))
+    if items:
+        return items
+    legacy_in = str(prob.get("sample_input") or "")
+    legacy_out = str(prob.get("sample_output") or "")
+    legacy_exp = str(prob.get("explanation") or "")
+    if legacy_in.strip() or legacy_out.strip():
+        return [{"input": legacy_in, "output": legacy_out, "explanation": legacy_exp}]
+    return []
+
+
+def _normalize_samples_payload(raw_samples: Optional[List[Any]]) -> List[Dict[str, str]]:
+    """Normalizes incoming Pydantic ProblemSampleItem / dict list, dropping completely blank items."""
+    if not raw_samples:
+        return []
+    cleaned: List[Dict[str, str]] = []
+    for item in raw_samples:
+        if hasattr(item, "model_dump"):
+            d = item.model_dump()
+        elif hasattr(item, "dict"):
+            d = item.dict()
+        elif isinstance(item, dict):
+            d = item
+        else:
+            continue
+        inp = str(d.get("input") or "")
+        outp = str(d.get("output") or "")
+        exp = str(d.get("explanation") or "")
+        if inp.strip() or outp.strip() or exp.strip():
+            cleaned.append({"input": inp, "output": outp, "explanation": exp})
+    return cleaned
+
+
+def _extract_problem_image_filenames(prob: Dict[str, Any]) -> Set[str]:
+    """Extracts all referenced problem-images/<filename> entries from a problem's Markdown fields and samples."""
+    chunks: List[str] = [
+        str(prob.get("statement_md") or ""),
+        str(prob.get("input_description") or ""),
+        str(prob.get("output_description") or ""),
+        str(prob.get("constraints_md") or ""),
+        str(prob.get("explanation") or ""),
+    ]
+    samples_val = prob.get("samples")
+    if isinstance(samples_val, str):
+        chunks.append(samples_val)
+    elif isinstance(samples_val, list):
+        chunks.append(json.dumps(samples_val, ensure_ascii=False))
+    blob = "\n".join(chunks)
+    return {m.lower() for m in PROBLEM_IMAGE_REF_RE.findall(blob)}
 
 
 def _slugify(text: str) -> str:
@@ -514,7 +610,7 @@ def get_problem(
         )
         static_bundle = {
             "tags": _get_problem_tags(db, pid),
-            "samples": samples,
+            "sample_testcases": samples,
             "testcase_count": int(tc_count["cnt"]) if tc_count else 0,
         }
         if is_staff(current_user):
@@ -588,7 +684,8 @@ def get_problem(
             )
 
     prob["tags"] = static_bundle["tags"]
-    prob["samples"] = static_bundle["samples"]
+    prob["samples"] = _resolve_problem_samples(prob)
+    prob["sample_testcases"] = static_bundle.get("sample_testcases", [])
     prob["testcase_count"] = static_bundle["testcase_count"]
     prob["recent_submissions"] = recent_subs
     prob["block_old_code"] = bool(blocking)
@@ -631,14 +728,31 @@ def create_problem(
         storage.put_text(checker_key, payload.checker_source)
 
     explanation_val = payload.explanation if (payload.explanation and payload.explanation.strip()) else None
+    sample_input_val = payload.sample_input
+    sample_output_val = payload.sample_output
+    if payload.samples is not None:
+        normalized_samples = _normalize_samples_payload(payload.samples)
+        if normalized_samples:
+            sample_input_val = normalized_samples[0]["input"]
+            sample_output_val = normalized_samples[0]["output"]
+            if explanation_val is None and normalized_samples[0]["explanation"].strip():
+                explanation_val = normalized_samples[0]["explanation"]
+    else:
+        normalized_samples = (
+            [{"input": sample_input_val, "output": sample_output_val, "explanation": explanation_val or ""}]
+            if (sample_input_val.strip() or sample_output_val.strip())
+            else []
+        )
+    samples_json_str = json.dumps(normalized_samples, ensure_ascii=False)
+
     pid = db.insert_returning_id(
         """
         INSERT INTO problems (
             code, title, statement_md, input_description, output_description,
-            constraints_md, sample_input, sample_output, explanation, time_limit_ms,
+            constraints_md, sample_input, sample_output, explanation, samples, time_limit_ms,
             memory_limit_mb, points, difficulty, visibility, submission_retention_mode,
             checker_type, checker_language, checker_storage_key, created_by
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             code,
@@ -647,9 +761,10 @@ def create_problem(
             payload.input_description,
             payload.output_description,
             payload.constraints_md,
-            payload.sample_input,
-            payload.sample_output,
+            sample_input_val,
+            sample_output_val,
             explanation_val,
+            samples_json_str,
             payload.time_limit_ms,
             payload.memory_limit_mb,
             payload.points,
@@ -670,6 +785,7 @@ def create_problem(
     )
     invalidate_problem_caches()
     prob = db.fetchone("SELECT * FROM problems WHERE id = %s", (pid,))
+    prob["samples"] = _resolve_problem_samples(prob)
     prob["tags"] = _get_problem_tags(db, pid)
     allowed_users = get_problem_allowed_users(db, pid)
     prob["allowed_users"] = allowed_users
@@ -695,6 +811,34 @@ def update_problem(
     data = (payload.model_dump(exclude_none=True) if hasattr(payload, "model_dump") else payload.dict(exclude_none=True))
     if "explanation" in data and not str(data["explanation"]).strip():
         data["explanation"] = None
+    if "samples" in data:
+        normalized_samples = _normalize_samples_payload(data["samples"])
+        data["samples"] = json.dumps(normalized_samples, ensure_ascii=False)
+        if normalized_samples:
+            data["sample_input"] = normalized_samples[0]["input"]
+            data["sample_output"] = normalized_samples[0]["output"]
+            if "explanation" not in data:
+                first_exp = normalized_samples[0]["explanation"]
+                data["explanation"] = first_exp if first_exp.strip() else None
+        else:
+            data["sample_input"] = ""
+            data["sample_output"] = ""
+            if "explanation" not in data:
+                data["explanation"] = None
+    elif "sample_input" in data or "sample_output" in data or "explanation" in data:
+        # Keep legacy updates in sync with single-sample JSON when samples wasn't explicitly sent
+        existing_samples = _parse_samples_json(prob.get("samples"))
+        if len(existing_samples) <= 1:
+            eff_in = data.get("sample_input", prob.get("sample_input") or "")
+            eff_out = data.get("sample_output", prob.get("sample_output") or "")
+            eff_exp = data["explanation"] if "explanation" in data else (prob.get("explanation") or "")
+            synced = (
+                [{"input": eff_in, "output": eff_out, "explanation": eff_exp or ""}]
+                if (str(eff_in).strip() or str(eff_out).strip())
+                else []
+            )
+            data["samples"] = json.dumps(synced, ensure_ascii=False)
+
     tags = data.pop("tags", None)
     allowed_user_ids = data.pop("allowed_user_ids", None)
     checker_src = data.pop("checker_source", None)
@@ -737,6 +881,7 @@ def update_problem(
     )
     invalidate_problem_caches()
     updated = db.fetchone("SELECT * FROM problems WHERE id = %s", (problem_id,))
+    updated["samples"] = _resolve_problem_samples(updated)
     updated["tags"] = _get_problem_tags(db, problem_id)
     allowed_users = get_problem_allowed_users(db, problem_id)
     updated["allowed_users"] = allowed_users
@@ -823,19 +968,118 @@ def delete_problem(
     request: Request,
     current_user: dict = Depends(require_roles("admin", "teacher")),
     db: Database = Depends(get_db),
+    storage: BaseStorage = Depends(get_storage),
 ):
-    prob = db.fetchone("SELECT * FROM problems WHERE id = %s AND deleted_at IS NULL", (problem_id,))
+    """
+    Permanently hard-deletes a problem and ALL of its associated files & records from
+    Cloudflare R2 (testcases, custom checker, submission source files, unreferenced problem images)
+    and Neon PostgreSQL (submission_results -> submissions -> testcases -> links -> problems).
+    """
+    prob = db.fetchone("SELECT * FROM problems WHERE id = %s", (problem_id,))
     if not prob:
         raise HTTPException(status_code=404, detail="Problem not found.")
     if not _can_edit_problem(current_user, prob):
-        raise HTTPException(status_code=403, detail="Permission denied.")
+        raise HTTPException(
+            status_code=403,
+            detail="Bạn chỉ có quyền xóa bài tập do mình tạo hoặc cần quyền Admin.",
+        )
 
-    db.execute(
-        "UPDATE problems SET deleted_at = %s WHERE id = %s",
-        (datetime.now(timezone.utc).isoformat(), problem_id),
+    # 1. Gather ALL Cloudflare R2 / storage keys to delete BEFORE modifying PostgreSQL
+    r2_keys_to_delete: Set[str] = set()
+
+    checker_key = (prob.get("checker_storage_key") or "").strip()
+    if checker_key and checker_key != "pending":
+        r2_keys_to_delete.add(checker_key)
+
+    tc_rows = db.fetchall(
+        "SELECT id, input_storage_key, output_storage_key FROM testcases WHERE problem_id = %s",
+        (problem_id,),
     )
+    for tc in tc_rows:
+        for col in ("input_storage_key", "output_storage_key"):
+            k = (tc.get(col) or "").strip()
+            if k and k != "pending":
+                r2_keys_to_delete.add(k)
+
+    sub_rows = db.fetchall(
+        "SELECT id, source_storage_key FROM submissions WHERE problem_id = %s",
+        (problem_id,),
+    )
+    for sub in sub_rows:
+        k = (sub.get("source_storage_key") or "").strip()
+        if k and k != "pending":
+            r2_keys_to_delete.add(k)
+
+    # Scan embedded problem-images/ in statement, descriptions, explanation & samples;
+    # only delete images that are NOT referenced by any other problem.
+    candidate_images = _extract_problem_image_filenames(prob)
+    if candidate_images:
+        other_probs = db.fetchall(
+            """
+            SELECT statement_md, input_description, output_description,
+                   constraints_md, explanation, samples
+            FROM problems
+            WHERE id != %s
+            """,
+            (problem_id,),
+        )
+        shared_images: Set[str] = set()
+        for other in other_probs:
+            shared_images.update(_extract_problem_image_filenames(other))
+        for orphan_img in candidate_images - shared_images:
+            r2_keys_to_delete.add(f"problem-images/{orphan_img}")
+
+    deleted_storage_files = 0
+    for key in sorted(r2_keys_to_delete):
+        try:
+            storage.delete(key)
+            deleted_storage_files += 1
+        except Exception as exc:
+            logger.warning("Failed deleting R2/storage key '%s' for problem #%s: %s", key, problem_id, exc)
+
+    # 2. Permanent Hard Delete from PostgreSQL in strict foreign-key order
+    db.execute(
+        """
+        DELETE FROM submission_results
+        WHERE submission_id IN (SELECT id FROM submissions WHERE problem_id = %s)
+           OR testcase_id IN (SELECT id FROM testcases WHERE problem_id = %s)
+        """,
+        (problem_id, problem_id),
+    )
+    db.execute("DELETE FROM submissions WHERE problem_id = %s", (problem_id,))
+    db.execute("DELETE FROM testcases WHERE problem_id = %s", (problem_id,))
+    db.execute("DELETE FROM testcase_groups WHERE problem_id = %s", (problem_id,))
+    db.execute("DELETE FROM problem_allowed_users WHERE problem_id = %s", (problem_id,))
+    db.execute("DELETE FROM problem_tags WHERE problem_id = %s", (problem_id,))
+    db.execute("DELETE FROM assignment_problems WHERE problem_id = %s", (problem_id,))
+    db.execute("DELETE FROM contest_problems WHERE problem_id = %s", (problem_id,))
+    db.execute("DELETE FROM problems WHERE id = %s", (problem_id,))
+
+    # 3. Record audit log & flush all related In-Memory TTL caches immediately
     record_audit_log(
-        db, current_user["id"], "problem.delete", "problem", str(problem_id), get_client_ip(request)
+        db,
+        current_user["id"],
+        "problem.hard_delete",
+        "problem",
+        str(problem_id),
+        get_client_ip(request),
+        {
+            "code": prob["code"],
+            "deleted_testcases": len(tc_rows),
+            "deleted_submissions": len(sub_rows),
+            "deleted_storage_files": deleted_storage_files,
+        },
     )
     invalidate_problem_caches()
-    return {"deleted": True, "id": problem_id}
+    invalidate_submission_caches()
+    invalidate_contest_caches()
+    app_cache.invalidate_prefix("classrooms:", "assignments:")
+
+    return {
+        "deleted": True,
+        "id": problem_id,
+        "code": prob["code"],
+        "deleted_testcases": len(tc_rows),
+        "deleted_submissions": len(sub_rows),
+        "deleted_storage_files": deleted_storage_files,
+    }

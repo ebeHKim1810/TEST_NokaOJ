@@ -11,6 +11,7 @@ import { TestcaseGeneratorPanel } from '../features/testcase-generator/TestcaseG
 import {
   AllowedUserItem,
   AutoImportProblemResult,
+  ProblemSample,
   SubmissionRetentionMode,
   TestcaseGroup,
   TestcaseItem,
@@ -100,6 +101,9 @@ export const AdminProblemManagerPage: React.FC = () => {
     tags: '',
   });
   const [allowedUsers, setAllowedUsers] = useState<AllowedUserItem[]>([]);
+  const [samples, setSamples] = useState<ProblemSample[]>([{ input: '', output: '', explanation: '' }]);
+  const [confirmDeleteProblem, setConfirmDeleteProblem] = useState(false);
+  const [deletingProblem, setDeletingProblem] = useState(false);
 
   // Testcase states
   const [testcases, setTestcases] = useState<TestcaseItem[]>([]);
@@ -142,11 +146,58 @@ export const AdminProblemManagerPage: React.FC = () => {
           checker_source: p.checker_source || '',
           tags: (p.tags || []).join(', '),
         });
+        const loadedSamples: ProblemSample[] =
+          Array.isArray(p.samples) && p.samples.length > 0
+            ? p.samples.map((s: any) => ({
+                input: String(s?.input ?? ''),
+                output: String(s?.output ?? ''),
+                explanation: String(s?.explanation ?? ''),
+              }))
+            : p.sample_input || p.sample_output || p.explanation
+            ? [
+                {
+                  input: String(p.sample_input || ''),
+                  output: String(p.sample_output || ''),
+                  explanation: String(p.explanation || ''),
+                },
+              ]
+            : [{ input: '', output: '', explanation: '' }];
+        setSamples(loadedSamples);
         setAllowedUsers(p.allowed_users || []);
         loadTestcases(p.id);
       });
     }
   }, [id, isNew]);
+
+  const updateSample = (idx: number, field: keyof ProblemSample, value: string) => {
+    setSamples((prev) => prev.map((s, i) => (i === idx ? { ...s, [field]: value } : s)));
+  };
+
+  const addSample = () => {
+    setSamples((prev) => [...prev, { input: '', output: '', explanation: '' }]);
+  };
+
+  const removeSample = (idx: number) => {
+    setSamples((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev));
+  };
+
+  const handleDeleteProblem = async () => {
+    if (isNew || !id) return;
+    setDeletingProblem(true);
+    try {
+      const res = await api.deleteProblem(Number(id));
+      toast(
+        `Đã xóa vĩnh viễn bài tập ${res.code || form.code} (${res.deleted_testcases ?? 0} testcase, ${res.deleted_submissions ?? 0} bài nộp, ${res.deleted_storage_files ?? 0} file R2).`,
+        'success'
+      );
+      setConfirmDeleteProblem(false);
+      navigate('/problems');
+    } catch (err: any) {
+      toast(err.message || 'Không thể xóa bài tập.', 'error');
+    } finally {
+      setDeletingProblem(false);
+    }
+  };
 
   const handleAutoImported = (data: AutoImportProblemResult) => {
     setForm((prev) => ({
@@ -168,6 +219,24 @@ export const AdminProblemManagerPage: React.FC = () => {
           ? data.memory_limit_mb
           : prev.memory_limit_mb,
     }));
+
+    if (Array.isArray(data.samples) && data.samples.length > 0) {
+      setSamples(
+        data.samples.map((s) => ({
+          input: String(s?.input ?? ''),
+          output: String(s?.output ?? ''),
+          explanation: String(s?.explanation ?? ''),
+        }))
+      );
+    } else if (data.sample_input?.trim() || data.sample_output?.trim() || data.explanation?.trim()) {
+      setSamples([
+        {
+          input: data.sample_input || '',
+          output: data.sample_output || '',
+          explanation: data.explanation || '',
+        },
+      ]);
+    }
   };
 
   const handleSaveProblem = async (e: React.FormEvent) => {
@@ -178,8 +247,16 @@ export const AdminProblemManagerPage: React.FC = () => {
     }
     setSaving(true);
     try {
+      const cleanedSamples = samples.filter(
+        (s) => s.input.trim() || s.output.trim() || s.explanation.trim()
+      );
+      const firstSample = cleanedSamples[0] || { input: '', output: '', explanation: '' };
       const payload = {
         ...form,
+        samples: cleanedSamples,
+        sample_input: firstSample.input,
+        sample_output: firstSample.output,
+        explanation: firstSample.explanation,
         time_limit_ms: Number(form.time_limit_ms),
         memory_limit_mb: Number(form.memory_limit_mb),
         points: Number(form.points),
@@ -276,8 +353,17 @@ export const AdminProblemManagerPage: React.FC = () => {
           <h1 className="text-xl font-semibold">
             {isNew ? 'Tạo bài tập mới' : `Quản lý bài tập: ${form.code || `#${id}`}`}
           </h1>
-          <p className="text-xs text-zinc-500">Hỗ trợ Markdown + LaTeX, Upload ZIP ghép cặp tự động và Sinh Testcase từ lời giải AC.</p>
+          <p className="text-xs text-zinc-500">Hỗ trợ Markdown + LaTeX, Nhập đề tự động AI, Upload ZIP và Sinh Testcase.</p>
         </div>
+        {!isNew && id && (
+          <button
+            type="button"
+            onClick={() => setConfirmDeleteProblem(true)}
+            className="noka-btn-danger text-xs"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Xóa bài tập
+          </button>
+        )}
       </div>
 
       {/* Tabs */}
@@ -439,26 +525,80 @@ export const AdminProblemManagerPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-zinc-500 mb-1">Sample Input</label>
-                <textarea rows={3} value={form.sample_input} onChange={(e) => setForm({ ...form, sample_input: e.target.value })} className="noka-input font-mono text-xs" />
+            {/* Dynamic Multi-Examples Section */}
+            <div className="border-t border-zinc-200 dark:border-zinc-800 pt-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                    Các ví dụ mẫu (Examples — {samples.length})
+                  </div>
+                  <p className="text-[11px] text-zinc-400">
+                    Thêm không giới hạn số lượng ví dụ; mỗi ví dụ có thể kèm phần giải thích riêng (Markdown + LaTeX + hình ảnh).
+                  </p>
+                </div>
+                <button type="button" onClick={addSample} className="noka-btn-secondary text-xs">
+                  <Plus className="h-3.5 w-3.5" /> Thêm ví dụ
+                </button>
               </div>
-              <div>
-                <label className="block text-xs text-zinc-500 mb-1">Sample Output</label>
-                <textarea rows={3} value={form.sample_output} onChange={(e) => setForm({ ...form, sample_output: e.target.value })} className="noka-input font-mono text-xs" />
-              </div>
-            </div>
 
-            <div className="border-t border-zinc-200 dark:border-zinc-800 pt-4">
-              <RichMarkdownField
-                label="Giải thích đề bài / Ví dụ (Tùy chọn)"
-                value={form.explanation}
-                onChange={(next) => setForm((prev) => ({ ...prev, explanation: next }))}
-                rows={5}
-                placeholder="Giải thích chi tiết ví dụ mẫu, hỗ trợ Markdown, công thức LaTeX ($\frac{a}{b}$, $\sqrt{n}$) và chèn hình ảnh minh họa..."
-                emptyPreviewText="Chưa có phần giải thích (mục này sẽ tự động ẩn với học sinh nếu để trống)."
-              />
+              <div className="space-y-4">
+                {samples.map((sample, idx) => (
+                  <div
+                    key={idx}
+                    className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50/40 dark:bg-[#14171D]/60 p-3.5 space-y-3"
+                  >
+                    <div className="flex items-center justify-between gap-2 border-b border-zinc-200/80 dark:border-zinc-800 pb-2">
+                      <span className="text-xs font-semibold text-[#2A5C99] dark:text-[#89B4E8]">
+                        Ví dụ {idx + 1}
+                      </span>
+                      {samples.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeSample(idx)}
+                          title={`Xóa Ví dụ ${idx + 1}`}
+                          className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40"
+                        >
+                          <Trash2 className="h-3 w-3" /> Xóa ví dụ
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs text-zinc-500 mb-1">Input mẫu {idx + 1}</label>
+                        <textarea
+                          rows={4}
+                          spellCheck={false}
+                          value={sample.input}
+                          onChange={(e) => updateSample(idx, 'input', e.target.value)}
+                          placeholder="Dữ liệu vào mẫu..."
+                          className="noka-input font-mono text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-zinc-500 mb-1">Output mẫu {idx + 1}</label>
+                        <textarea
+                          rows={4}
+                          spellCheck={false}
+                          value={sample.output}
+                          onChange={(e) => updateSample(idx, 'output', e.target.value)}
+                          placeholder="Dữ liệu ra mẫu..."
+                          className="noka-input font-mono text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    <RichMarkdownField
+                      label={`Giải thích cho Ví dụ ${idx + 1} (Tùy chọn)`}
+                      value={sample.explanation}
+                      onChange={(next) => updateSample(idx, 'explanation', next)}
+                      rows={4}
+                      placeholder={`Giải thích chi tiết cho Ví dụ ${idx + 1} (hỗ trợ Markdown, LaTeX và chèn ảnh minh họa)...`}
+                      emptyPreviewText="Chưa có phần giải thích cho ví dụ này."
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -692,6 +832,16 @@ export const AdminProblemManagerPage: React.FC = () => {
         danger
         onConfirm={confirmDeleteTc}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteProblem}
+        title={`Xóa vĩnh viễn bài tập ${form.code || `#${id}`}?`}
+        description="Hành động này sẽ xóa vĩnh viễn đề bài, toàn bộ test case, ảnh đính kèm và lịch sử nộp bài khỏi hệ thống (Neon PostgreSQL & Cloudflare R2) để giải phóng bộ nhớ. Không thể hoàn tác!"
+        confirmLabel={deletingProblem ? 'Đang xóa...' : 'Xóa vĩnh viễn'}
+        danger
+        onConfirm={handleDeleteProblem}
+        onCancel={() => !deletingProblem && setConfirmDeleteProblem(false)}
       />
     </div>
   );

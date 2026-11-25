@@ -24,6 +24,12 @@ export interface User {
   };
 }
 
+export interface ProblemSample {
+  input: string;
+  output: string;
+  explanation: string;
+}
+
 export interface ProblemSummary {
   id: number;
   code: string;
@@ -33,6 +39,7 @@ export interface ProblemSummary {
   visibility: Visibility;
   submission_retention_mode?: SubmissionRetentionMode;
   allowed_user_count?: number;
+  created_by?: number | null;
   time_limit_ms: number;
   memory_limit_mb: number;
   tags: string[];
@@ -54,7 +61,7 @@ export interface ProblemDetail extends ProblemSummary {
   checker_language?: 'python3' | 'cpp17' | 'cpp20';
   checker_source?: string;
   testcase_count: number;
-  samples: Array<{ id: number; name: string; input: string; output: string }>;
+  samples: ProblemSample[];
   recent_submissions: SubmissionSummary[];
   allowed_users?: AllowedUserItem[];
   allowed_user_ids?: number[];
@@ -67,6 +74,7 @@ export interface AutoImportProblemResult {
   input_description: string;
   output_description: string;
   constraints: string;
+  samples?: ProblemSample[];
   sample_input: string;
   sample_output: string;
   explanation: string;

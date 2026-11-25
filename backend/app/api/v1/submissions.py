@@ -53,8 +53,23 @@ def run_sample(
         raise HTTPException(status_code=404, detail="Problem not found.")
     ensure_problem_access(db, prob, current_user)
 
-    sample_in = payload.custom_input if payload.custom_input is not None else prob["sample_input"]
-    expected = None if payload.custom_input is not None else prob["sample_output"]
+    default_sample_in = prob.get("sample_input") or ""
+    default_sample_out = prob.get("sample_output") or ""
+    if not default_sample_in and prob.get("samples"):
+        import json as _json
+
+        raw_s = prob["samples"]
+        if isinstance(raw_s, str):
+            try:
+                raw_s = _json.loads(raw_s)
+            except Exception:
+                raw_s = []
+        if isinstance(raw_s, list) and raw_s and isinstance(raw_s[0], dict):
+            default_sample_in = str(raw_s[0].get("input") or "")
+            default_sample_out = str(raw_s[0].get("output") or "")
+
+    sample_in = payload.custom_input if payload.custom_input is not None else default_sample_in
+    expected = None if payload.custom_input is not None else default_sample_out
     checker_source = (
         storage.get_text(prob["checker_storage_key"])
         if prob.get("checker_storage_key")

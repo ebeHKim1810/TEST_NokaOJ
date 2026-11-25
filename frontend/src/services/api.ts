@@ -176,7 +176,15 @@ export const api = {
       submission_retention_mode?: 'latest' | 'best';
     }
   ) => request<any>(`/problems/${id}/access`, { method: 'PATCH', body: JSON.stringify(payload) }),
-  deleteProblem: (id: number) => request<any>(`/problems/${id}`, { method: 'DELETE' }),
+  deleteProblem: (id: number) =>
+    request<{
+      deleted: boolean;
+      id: number;
+      code?: string;
+      deleted_testcases?: number;
+      deleted_submissions?: number;
+      deleted_storage_files?: number;
+    }>(`/problems/${id}`, { method: 'DELETE' }),
   uploadProblemImage: (file: File) => {
     const fd = new FormData();
     fd.append('file', file);
@@ -201,6 +209,7 @@ export const api = {
       input_description: string;
       output_description: string;
       constraints: string;
+      samples?: Array<{ input: string; output: string; explanation: string }>;
       sample_input: string;
       sample_output: string;
       explanation: string;

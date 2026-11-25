@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
 import {
   Play,
@@ -14,12 +14,16 @@ import {
   Code2,
   ChevronsLeft,
   ChevronsRight,
+  Copy,
+  Check,
+  Trash2,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useApp } from '../stores/AppContext';
 import { DifficultyBadge, VerdictBadge } from '../components/StatusBadge';
 import { MarkdownLatex } from '../components/MarkdownLatex';
-import { LanguageId, ProblemDetail } from '../types';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { LanguageId, ProblemDetail, ProblemSample } from '../types';
 
 const DEFAULT_TEMPLATES: Record<LanguageId, string> = {
   cpp17: `#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n\n    return 0;\n}\n`,
@@ -29,6 +33,7 @@ const DEFAULT_TEMPLATES: Record<LanguageId, string> = {
 
 export const ProblemDetailPage: React.FC = () => {
   const { codeOrId } = useParams<{ codeOrId: string }>();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const rawContestId = searchParams.get('contest_id');
   const contestId = rawContestId && /^\d+$/.test(rawContestId) ? Number(rawContestId) : undefined;
@@ -46,6 +51,9 @@ export const ProblemDetailPage: React.FC = () => {
   const [latestSub, setLatestSub] = useState<any>(null);
   const [codeCollapsed, setCodeCollapsed] = useState(false);
   const [mobileTab, setMobileTab] = useState<'statement' | 'code'>('statement');
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const getDraftKey = (probCode: string, lang: LanguageId) =>
     contestId ? `noka_draft_c${contestId}_${probCode}_${lang}` : `noka_draft_${probCode}_${lang}`;
@@ -156,8 +164,55 @@ export const ProblemDetailPage: React.FC = () => {
     }
   };
 
+  const handleCopyText = async (key: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey((curr) => (curr === key ? null : curr)), 1500);
+    } catch {
+      toast('Không thể sao chép vào clipboard.', 'error');
+    }
+  };
+
+  const handleDeleteProblem = async () => {
+    if (!problem) return;
+    setDeleting(true);
+    try {
+      const res = await api.deleteProblem(problem.id);
+      toast(
+        `Đã xóa vĩnh viễn bài tập ${res.code || problem.code} (${res.deleted_testcases ?? 0} testcase, ${res.deleted_submissions ?? 0} bài nộp).`,
+        'success'
+      );
+      setConfirmDelete(false);
+      navigate('/problems');
+    } catch (err: any) {
+      toast(err.message || 'Không thể xóa bài tập.', 'error');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   if (loading) return <div className="py-12 text-center text-sm text-zinc-500">Đang tải đề bài...</div>;
   if (!problem) return <div className="py-12 text-center text-sm text-zinc-500">Không tìm thấy bài tập.</div>;
+
+  const canDeleteProblem = Boolean(
+    user &&
+      (user.roles.includes('admin') ||
+        (isStaff && (!problem.created_by || Number(problem.created_by) === Number(user.id))))
+  );
+
+  const displaySamples: ProblemSample[] =
+    Array.isArray(problem.samples) && problem.samples.length > 0
+      ? problem.samples
+      : problem.sample_input || problem.sample_output
+      ? [
+          {
+            input: problem.sample_input || '',
+            output: problem.sample_output || '',
+            explanation: problem.explanation || '',
+          },
+        ]
+      : [];
 
   return (
     <div className="space-y-4">
@@ -227,9 +282,21 @@ export const ProblemDetailPage: React.FC = () => {
               </h1>
             </div>
             {isStaff && (
-              <Link to={`/admin/problems/${problem.id}/edit`} className="noka-btn-secondary text-xs">
-                <Settings className="h-3.5 w-3.5" /> Quản lý
-              </Link>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <Link to={`/admin/problems/${problem.id}/edit`} className="noka-btn-secondary text-xs">
+                  <Settings className="h-3.5 w-3.5" /> Quản lý
+                </Link>
+                {canDeleteProblem && (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(true)}
+                    title="Xóa vĩnh viễn bài tập"
+                    className="noka-btn-danger text-xs"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Xóa
+                  </button>
+                )}
+              </div>
             )}
           </div>
 
@@ -286,24 +353,88 @@ export const ProblemDetailPage: React.FC = () => {
             </div>
           )}
 
-          {(problem.sample_input || problem.sample_output) && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1">Sample Input</div>
-                <pre className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-[#14171D] p-3 text-xs overflow-x-auto">
-                  {problem.sample_input}
-                </pre>
-              </div>
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-1">Sample Output</div>
-                <pre className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-[#14171D] p-3 text-xs overflow-x-auto">
-                  {problem.sample_output}
-                </pre>
-              </div>
+          {displaySamples.length > 0 && (
+            <div className="space-y-4">
+              {displaySamples.map((sample, idx) => {
+                const inKey = `in-${idx}`;
+                const outKey = `out-${idx}`;
+                return (
+                  <div
+                    key={idx}
+                    className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50/40 dark:bg-[#14171D]/60 p-3.5 space-y-3"
+                  >
+                    <div className="text-xs font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-300">
+                      Ví dụ {idx + 1}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                            Input
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyText(inKey, sample.input)}
+                            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors"
+                          >
+                            {copiedKey === inKey ? (
+                              <>
+                                <Check className="h-3 w-3 text-[#1F6F45] dark:text-[#84CBA3]" /> Đã copy
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="h-3 w-3" /> Copy
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <pre className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-[#101318] p-3 text-xs font-mono overflow-x-auto min-h-[44px]">
+                          {sample.input}
+                        </pre>
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+                            Output
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyText(outKey, sample.output)}
+                            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-zinc-500 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors"
+                          >
+                            {copiedKey === outKey ? (
+                              <>
+                                <Check className="h-3 w-3 text-[#1F6F45] dark:text-[#84CBA3]" /> Đã copy
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="h-3 w-3" /> Copy
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        <pre className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-[#101318] p-3 text-xs font-mono overflow-x-auto min-h-[44px]">
+                          {sample.output}
+                        </pre>
+                      </div>
+                    </div>
+
+                    {sample.explanation && sample.explanation.trim().length > 0 && (
+                      <div className="rounded-md border border-[#2A5C99]/15 dark:border-[#89B4E8]/20 bg-white/80 dark:bg-[#12151B] p-3 space-y-1.5">
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-[#2A5C99] dark:text-[#89B4E8]">
+                          Giải thích Ví dụ {idx + 1}
+                        </h3>
+                        <MarkdownLatex content={sample.explanation} />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
-          {problem.explanation && problem.explanation.trim().length > 0 && (
+          {displaySamples.length === 0 && problem.explanation && problem.explanation.trim().length > 0 && (
             <div className="rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-[#14171D] p-4 space-y-2">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-[#2A5C99] dark:text-[#89B4E8]">
                 Giải thích
@@ -490,6 +621,16 @@ export const ProblemDetailPage: React.FC = () => {
         </button>
       )}
       </div>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title={`Xóa vĩnh viễn bài tập ${problem.code}?`}
+        description="Hành động này sẽ xóa vĩnh viễn đề bài, toàn bộ test case, ảnh đính kèm và lịch sử nộp bài khỏi hệ thống (Neon PostgreSQL & Cloudflare R2) để giải phóng bộ nhớ. Không thể hoàn tác!"
+        confirmLabel={deleting ? 'Đang xóa...' : 'Xóa vĩnh viễn'}
+        danger
+        onConfirm={handleDeleteProblem}
+        onCancel={() => !deleting && setConfirmDelete(false)}
+      />
     </div>
   );
 };

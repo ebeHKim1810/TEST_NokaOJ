@@ -38,12 +38,16 @@ Yêu cầu bắt buộc:
    - `input_description`: Mô tả dữ liệu vào (Markdown + LaTeX).
    - `output_description`: Mô tả dữ liệu ra (Markdown + LaTeX).
    - `constraints`: Giới hạn / Ràng buộc / Subtask (Markdown + LaTeX). Nếu đề gộp giới hạn chung vào mục Input thì tách phần giới hạn/subtask sang trường này.
-   - `sample_input`: Dữ liệu vào của Ví dụ 1. Giữ nguyên ĐÚNG ký tự xuống dòng và khoảng trắng, KHÔNG bọc trong dấu ``` hay ghi nhãn "Input:".
-   - `sample_output`: Dữ liệu ra của Ví dụ 1. Giữ nguyên ĐÚNG ký tự xuống dòng và khoảng trắng, KHÔNG bọc trong dấu ``` hay ghi nhãn "Output:".
-   - `explanation`: Phần giải thích ví dụ (Markdown + LaTeX). Nếu đề có nhiều ví dụ (Ví dụ 2, Ví dụ 3...), hãy đưa các ví dụ bổ sung đó (dùng code block gọn gàng) cùng toàn bộ phần giải thích vào trường `explanation`. Nếu đề không có giải thích và chỉ có 1 ví dụ, để chuỗi rỗng `""`.
+   - `samples`: Mảng JSON chứa TẤT CẢ các ví dụ mẫu có trong đề bài (Ví dụ 1, Ví dụ 2, Ví dụ 3...). Mỗi phần tử là một object gồm đúng 3 trường:
+     - `input`: Dữ liệu vào của ví dụ đó (giữ nguyên ĐÚNG ký tự xuống dòng và khoảng trắng, KHÔNG bọc trong dấu ``` hay ghi nhãn "Input:").
+     - `output`: Dữ liệu ra của ví dụ đó (giữ nguyên ĐÚNG ký tự xuống dòng và khoảng trắng, KHÔNG bọc trong dấu ``` hay ghi nhãn "Output:").
+     - `explanation`: Phần giải thích RIÊNG cho ví dụ đó (Markdown + LaTeX, để chuỗi rỗng `""` nếu ví dụ đó không có giải thích).
+   - `sample_input`: Dữ liệu vào của Ví dụ 1 (trùng với `samples[0].input`, để `""` nếu không có ví dụ).
+   - `sample_output`: Dữ liệu ra của Ví dụ 1 (trùng với `samples[0].output`, để `""` nếu không có ví dụ).
+   - `explanation`: Phần giải thích chung hoặc giải thích của Ví dụ 1 (để chuỗi rỗng `""` nếu không có).
    - `time_limit_ms`: Giới hạn thời gian tính bằng mili-giây (số nguyên, ví dụ 1 giây -> 1000, 2.5s -> 2500; mặc định 1000 nếu không nêu).
    - `memory_limit_mb`: Giới hạn bộ nhớ tính bằng MB (số nguyên, ví dụ 256 MB -> 256, 512 MB -> 512; mặc định 256 nếu không nêu).
-4. CHỈ trả về duy nhất một JSON object hợp lệ với đúng 10 khóa trên, không kèm bất kỳ văn bản giải thích nào bên ngoài JSON."""
+4. CHỈ trả về duy nhất một JSON object hợp lệ với đúng các khóa trên, không kèm bất kỳ văn bản giải thích nào bên ngoài JSON."""
 
 GEMINI_RESPONSE_SCHEMA: Dict[str, Any] = {
     "type": "OBJECT",
@@ -53,6 +57,18 @@ GEMINI_RESPONSE_SCHEMA: Dict[str, Any] = {
         "input_description": {"type": "STRING"},
         "output_description": {"type": "STRING"},
         "constraints": {"type": "STRING"},
+        "samples": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "input": {"type": "STRING"},
+                    "output": {"type": "STRING"},
+                    "explanation": {"type": "STRING"},
+                },
+                "required": ["input", "output", "explanation"],
+            },
+        },
         "sample_input": {"type": "STRING"},
         "sample_output": {"type": "STRING"},
         "explanation": {"type": "STRING"},
@@ -65,6 +81,7 @@ GEMINI_RESPONSE_SCHEMA: Dict[str, Any] = {
         "input_description",
         "output_description",
         "constraints",
+        "samples",
         "sample_input",
         "sample_output",
         "explanation",
@@ -385,15 +402,45 @@ def _parse_and_normalize_ai_json(raw_text: str) -> Dict[str, Any]:
             s = re.sub(r"\n?```$", "", s)
         return s.strip("\n")
 
+    # Parse multi-sample array cleanly and keep backward-compatible sample_input/sample_output synced
+    raw_samples = parsed.get("samples")
+    clean_samples: List[Dict[str, str]] = []
+    if isinstance(raw_samples, list):
+        for s_item in raw_samples:
+            if not isinstance(s_item, dict):
+                continue
+            s_in = _clean_sample(str(s_item.get("input") or "").replace("\r\n", "\n"))
+            s_out = _clean_sample(str(s_item.get("output") or "").replace("\r\n", "\n"))
+            s_exp = str(s_item.get("explanation") or "").replace("\r\n", "\n").strip()
+            if s_in.strip() or s_out.strip() or s_exp:
+                clean_samples.append({"input": s_in, "output": s_out, "explanation": s_exp})
+
+    legacy_in = _clean_sample(_str_field("sample_input", preserve_leading=True))
+    legacy_out = _clean_sample(_str_field("sample_output", preserve_leading=True))
+    legacy_exp = _str_field("explanation")
+
+    if not clean_samples and (legacy_in.strip() or legacy_out.strip()):
+        clean_samples.append(
+            {"input": legacy_in, "output": legacy_out, "explanation": legacy_exp}
+        )
+    elif clean_samples:
+        if not legacy_in.strip():
+            legacy_in = clean_samples[0]["input"]
+        if not legacy_out.strip():
+            legacy_out = clean_samples[0]["output"]
+        if not legacy_exp and clean_samples[0]["explanation"]:
+            legacy_exp = clean_samples[0]["explanation"]
+
     return {
         "title": _str_field("title"),
         "description": _str_field("description"),
         "input_description": _str_field("input_description"),
         "output_description": _str_field("output_description"),
         "constraints": _str_field("constraints"),
-        "sample_input": _clean_sample(_str_field("sample_input", preserve_leading=True)),
-        "sample_output": _clean_sample(_str_field("sample_output", preserve_leading=True)),
-        "explanation": _str_field("explanation"),
+        "samples": clean_samples,
+        "sample_input": legacy_in,
+        "sample_output": legacy_out,
+        "explanation": legacy_exp,
         "time_limit_ms": _int_clamped("time_limit_ms", 1000, 100, 30000),
         "memory_limit_mb": _int_clamped("memory_limit_mb", 256, 16, 2048),
     }
