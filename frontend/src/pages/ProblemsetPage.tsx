@@ -16,7 +16,7 @@ import { api } from '../services/api';
 import { useApp } from '../stores/AppContext';
 import { DifficultyBadge, VisibilityBadge } from '../components/StatusBadge';
 import { ProblemAccessPicker } from '../components/ProblemAccessPicker';
-import { ConfirmDialog } from '../components/ConfirmDialog';
+import { DeleteProblemConfirmDialog } from '../components/DeleteProblemConfirmDialog';
 import {
   AllowedUserItem,
   ProblemSummary,
@@ -577,16 +577,11 @@ export const ProblemsetPage: React.FC = () => {
           </div>
         </div>
       )}
-      <ConfirmDialog
+      <DeleteProblemConfirmDialog
         open={Boolean(deleteTarget)}
-        title={`Xóa vĩnh viễn bài tập ${deleteTarget?.code ?? ''}?`}
-        description={
-          deleteTarget
-            ? `Bài tập "${deleteTarget.title}" cùng toàn bộ test case, ảnh đính kèm và lịch sử nộp bài sẽ bị xóa vĩnh viễn khỏi hệ thống (Neon PostgreSQL & Cloudflare R2) để giải phóng bộ nhớ. Hành động này không thể hoàn tác!`
-            : ''
-        }
-        confirmLabel={deletingProblem ? 'Đang xóa...' : 'Xóa vĩnh viễn'}
-        danger
+        problemCode={deleteTarget?.code ?? ''}
+        problemTitle={deleteTarget?.title}
+        deleting={deletingProblem}
         onConfirm={handleConfirmDeleteProblem}
         onCancel={() => !deletingProblem && setDeleteTarget(null)}
       />

@@ -4,6 +4,7 @@ import { Save, Upload, Download, Trash2, Plus, Sparkles, Code2, Shield, HardDriv
 import { api } from '../services/api';
 import { useApp } from '../stores/AppContext';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { DeleteProblemConfirmDialog } from '../components/DeleteProblemConfirmDialog';
 import { ProblemAccessPicker } from '../components/ProblemAccessPicker';
 import { ProblemAutoImportBox } from '../components/ProblemAutoImportBox';
 import { RichMarkdownField } from '../components/RichMarkdownToolbar';
@@ -834,12 +835,11 @@ export const AdminProblemManagerPage: React.FC = () => {
         onCancel={() => setDeleteTarget(null)}
       />
 
-      <ConfirmDialog
+      <DeleteProblemConfirmDialog
         open={confirmDeleteProblem}
-        title={`Xóa vĩnh viễn bài tập ${form.code || `#${id}`}?`}
-        description="Hành động này sẽ xóa vĩnh viễn đề bài, toàn bộ test case, ảnh đính kèm và lịch sử nộp bài khỏi hệ thống (Neon PostgreSQL & Cloudflare R2) để giải phóng bộ nhớ. Không thể hoàn tác!"
-        confirmLabel={deletingProblem ? 'Đang xóa...' : 'Xóa vĩnh viễn'}
-        danger
+        problemCode={form.code || `#${id}`}
+        problemTitle={form.title}
+        deleting={deletingProblem}
         onConfirm={handleDeleteProblem}
         onCancel={() => !deletingProblem && setConfirmDeleteProblem(false)}
       />

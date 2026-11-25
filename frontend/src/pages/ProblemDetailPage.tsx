@@ -22,7 +22,7 @@ import { api } from '../services/api';
 import { useApp } from '../stores/AppContext';
 import { DifficultyBadge, VerdictBadge } from '../components/StatusBadge';
 import { MarkdownLatex } from '../components/MarkdownLatex';
-import { ConfirmDialog } from '../components/ConfirmDialog';
+import { DeleteProblemConfirmDialog } from '../components/DeleteProblemConfirmDialog';
 import { LanguageId, ProblemDetail, ProblemSample } from '../types';
 
 const DEFAULT_TEMPLATES: Record<LanguageId, string> = {
@@ -622,12 +622,11 @@ export const ProblemDetailPage: React.FC = () => {
       )}
       </div>
 
-      <ConfirmDialog
+      <DeleteProblemConfirmDialog
         open={confirmDelete}
-        title={`Xóa vĩnh viễn bài tập ${problem.code}?`}
-        description="Hành động này sẽ xóa vĩnh viễn đề bài, toàn bộ test case, ảnh đính kèm và lịch sử nộp bài khỏi hệ thống (Neon PostgreSQL & Cloudflare R2) để giải phóng bộ nhớ. Không thể hoàn tác!"
-        confirmLabel={deleting ? 'Đang xóa...' : 'Xóa vĩnh viễn'}
-        danger
+        problemCode={problem.code}
+        problemTitle={problem.title}
+        deleting={deleting}
         onConfirm={handleDeleteProblem}
         onCancel={() => !deleting && setConfirmDelete(false)}
       />
