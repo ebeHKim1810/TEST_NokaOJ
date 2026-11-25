@@ -465,6 +465,11 @@ async def _call_gemini_api(
             status_code=429,
             detail="Google Gemini API đang quá tải hoặc chạm hạn mức miễn phí tạm thời. Vui lòng chờ vài giây rồi thử lại.",
         )
+    if resp.status_code == 503:
+        raise HTTPException(
+            status_code=503,
+            detail="Google Gemini API đang có lưu lượng truy cập cao tạm thời (HTTP 503). Vui lòng thử lại sau vài giây.",
+        )
     if resp.status_code in (401, 403):
         raise HTTPException(
             status_code=502,
@@ -622,7 +627,7 @@ async def auto_import_problem_from_bytes(
     kind, canonical_mime = detect_supported_upload(data, filename, content_type)
 
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip() or "gemini-3.6-flash"
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
     openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
 
@@ -645,8 +650,15 @@ async def auto_import_problem_from_bytes(
             )
 
     if gemini_key:
-        candidate_models = []
-        for m in (gemini_model, "gemini-3.8-flash", "gemini-flash-latest"):
+        candidate_models: List[str] = []
+        for m in (
+            gemini_model,
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.8-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-flash-lite-latest",
+        ):
             if m and m not in candidate_models:
                 candidate_models.append(m)
 
@@ -664,15 +676,23 @@ async def auto_import_problem_from_bytes(
                 return result, f"gemini:{m_name}"
             except HTTPException as exc:
                 last_exc = exc
-                # Retry next model alias if current model was deprecated/404
-                if exc.status_code == 502 and "HTTP 404" in str(exc.detail) and idx + 1 < len(candidate_models):
-                    logger.warning("Gemini model '%s' returned 404, trying fallback '%s'.", m_name, candidate_models[idx + 1])
+                is_retryable_model_err = (
+                    exc.status_code in (429, 503, 504)
+                    or (exc.status_code == 502 and "HTTP 404" in str(exc.detail))
+                )
+                if is_retryable_model_err and idx + 1 < len(candidate_models):
+                    logger.warning(
+                        "Gemini model '%s' failed (%s), falling back to '%s'.",
+                        m_name,
+                        exc.status_code,
+                        candidate_models[idx + 1],
+                    )
                     continue
                 break
 
         assert last_exc is not None
         # Fallback to OpenAI only if explicitly configured and Gemini failed due to quota/upstream error
-        if openai_key and last_exc.status_code in (429, 502, 504):
+        if openai_key and last_exc.status_code in (429, 502, 503, 504):
             logger.warning("Gemini failed (%s), falling back to OpenAI.", last_exc.status_code)
             result = await _call_openai_api(
                 api_key=openai_key,
