@@ -622,7 +622,7 @@ async def auto_import_problem_from_bytes(
     kind, canonical_mime = detect_supported_upload(data, filename, content_type)
 
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()
     openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
 
@@ -645,31 +645,46 @@ async def auto_import_problem_from_bytes(
             )
 
     if gemini_key:
-        try:
-            result = await _call_gemini_api(
-                api_key=gemini_key,
-                model=gemini_model,
-                kind=kind,
-                mime_type=canonical_mime,
-                raw_bytes=data,
-                docx_text=docx_text,
-            )
-            return result, f"gemini:{gemini_model}"
-        except HTTPException as exc:
-            # Fallback to OpenAI only if explicitly configured and Gemini failed due to quota/upstream error
-            if openai_key and exc.status_code in (429, 502, 504):
-                logger.warning("Gemini failed (%s), falling back to OpenAI.", exc.status_code)
-                result = await _call_openai_api(
-                    api_key=openai_key,
-                    model=openai_model,
+        candidate_models = []
+        for m in (gemini_model, "gemini-3.8-flash", "gemini-flash-latest"):
+            if m and m not in candidate_models:
+                candidate_models.append(m)
+
+        last_exc: Optional[HTTPException] = None
+        for idx, m_name in enumerate(candidate_models):
+            try:
+                result = await _call_gemini_api(
+                    api_key=gemini_key,
+                    model=m_name,
                     kind=kind,
                     mime_type=canonical_mime,
-                    filename=filename,
                     raw_bytes=data,
                     docx_text=docx_text,
                 )
-                return result, f"openai:{openai_model}"
-            raise
+                return result, f"gemini:{m_name}"
+            except HTTPException as exc:
+                last_exc = exc
+                # Retry next model alias if current model was deprecated/404
+                if exc.status_code == 502 and "HTTP 404" in str(exc.detail) and idx + 1 < len(candidate_models):
+                    logger.warning("Gemini model '%s' returned 404, trying fallback '%s'.", m_name, candidate_models[idx + 1])
+                    continue
+                break
+
+        assert last_exc is not None
+        # Fallback to OpenAI only if explicitly configured and Gemini failed due to quota/upstream error
+        if openai_key and last_exc.status_code in (429, 502, 504):
+            logger.warning("Gemini failed (%s), falling back to OpenAI.", last_exc.status_code)
+            result = await _call_openai_api(
+                api_key=openai_key,
+                model=openai_model,
+                kind=kind,
+                mime_type=canonical_mime,
+                filename=filename,
+                raw_bytes=data,
+                docx_text=docx_text,
+            )
+            return result, f"openai:{openai_model}"
+        raise last_exc
 
     result = await _call_openai_api(
         api_key=openai_key,
