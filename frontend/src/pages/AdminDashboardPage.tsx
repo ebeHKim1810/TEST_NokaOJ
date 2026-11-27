@@ -68,6 +68,7 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
   const [stats, setStats] = useState<any>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
+  const [usersError, setUsersError] = useState('');
   const [userSearch, setUserSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | Role>('all');
   const [settings, setSettings] = useState<Record<string, string>>({});
@@ -101,10 +102,18 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
     if (!isStaff) return;
     api.getAdminStats().then(setStats).catch(() => {});
     setLoadingUsers(true);
-    const fetchUsers = isAdmin ? api.listAdminUsers('', 1000) : api.listUsers('', 1000);
+    setUsersError('');
+    const fetchUsers = isAdmin
+      ? api.listAdminUsers('', 1000).catch(() => api.listUsers('', 1000))
+      : api.listUsers('', 1000);
     fetchUsers
-      .then((r) => setUsers(r.items || []))
-      .catch(() => {})
+      .then((r) => {
+        const items = Array.isArray(r) ? r : (r?.items || []);
+        setUsers(items);
+      })
+      .catch((err: any) => {
+        setUsersError(err?.message || 'Không thể tải danh sách người dùng.');
+      })
       .finally(() => setLoadingUsers(false));
     if (isAdmin) {
       api.getAdminSettings().then((r) => setSettings(r.settings || {})).catch(() => {});
@@ -433,6 +442,15 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
             </div>
           </div>
 
+          {usersError && (
+            <div className="rounded-md border border-[#E59CB4] bg-[#FDF0F4] dark:bg-[#E59CB4]/10 px-4 py-3 flex items-center justify-between gap-3 text-xs text-[#9B3558] dark:text-[#F1B4C8]">
+              <span>Lỗi tải danh sách người dùng: {usersError}</span>
+              <button type="button" onClick={load} className="noka-btn-secondary text-xs shrink-0">
+                Thử lại
+              </button>
+            </div>
+          )}
+
           <div className="noka-section overflow-x-auto">
             <table className="noka-table text-xs">
               <thead>
@@ -447,7 +465,7 @@ export const AdminDashboardPage: React.FC<AdminDashboardPageProps> = ({
                 </tr>
               </thead>
               <tbody>
-                {loadingUsers && users.length === 0 ? (
+                {(loadingAuth || loadingUsers) && users.length === 0 ? (
                   <tr>
                     <td colSpan={isAdmin ? 7 : 6} className="py-8 text-center text-zinc-500">
                       Đang tải danh sách người dùng...
