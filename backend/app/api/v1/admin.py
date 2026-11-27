@@ -1,12 +1,13 @@
 """Admin & System Configuration API (/api/v1/admin)."""
 from fastapi import APIRouter, Depends, Request
 
+from backend.app.api.v1.users import _list_users_impl, _update_user_impl
 from backend.app.core.audit import record_audit_log
 from backend.app.core.cache import app_cache, invalidate_settings_caches
 from backend.app.core.config import get_settings
 from backend.app.core.database import Database, get_db
 from backend.app.core.security import get_client_ip, require_roles
-from backend.app.schemas.schemas import SystemSettingsUpdateRequest
+from backend.app.schemas.schemas import SystemSettingsUpdateRequest, UserUpdateRequest
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -108,3 +109,26 @@ def list_audit_logs(
         (min(500, max(1, limit)),),
     )
     return {"items": rows}
+
+
+@router.get("/users")
+def admin_list_users(
+    search: str = "",
+    role: str = "",
+    limit: int = 500,
+    current_user: dict = Depends(require_roles("admin")),
+    db: Database = Depends(get_db),
+):
+    return _list_users_impl(db, search=search, role=role, limit=limit)
+
+
+@router.put("/users/{user_id}")
+@router.patch("/users/{user_id}")
+def admin_update_user(
+    user_id: int,
+    payload: UserUpdateRequest,
+    request: Request,
+    current_user: dict = Depends(require_roles("admin")),
+    db: Database = Depends(get_db),
+):
+    return _update_user_impl(user_id, payload, request, current_user, db)

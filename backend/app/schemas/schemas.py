@@ -26,7 +26,11 @@ class UserCreateRequest(BaseModel):
 
 
 class UserUpdateRequest(BaseModel):
+    username: Optional[str] = Field(None, max_length=64)
     full_name: Optional[str] = Field(None, max_length=128)
+    email: Optional[str] = Field(None, max_length=255)
+    new_password: Optional[str] = Field(None, max_length=128)
+    role: Optional[Literal["admin", "teacher", "student"]] = None
     is_active: Optional[bool] = None
     roles: Optional[List[Literal["admin", "teacher", "student"]]] = None
 

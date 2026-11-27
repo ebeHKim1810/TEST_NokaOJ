@@ -37,6 +37,12 @@
   }
 }
 
+/* Hide Edge/IE native password reveal icon so custom PasswordInput eye icon is not duplicated */
+input[type='password']::-ms-reveal,
+input[type='password']::-ms-clear {
+  display: none;
+}
+
 /* Clean developer-tool component primitives (Linear / GitHub / JetBrains aesthetic) */
 .noka-input {
   @apply w-full rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-[#14171D] px-3 py-1.5 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:border-[#7BA7D9] transition-colors;

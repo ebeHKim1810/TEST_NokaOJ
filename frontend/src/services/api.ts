@@ -352,11 +352,24 @@ export const api = {
   myAssignments: () => request<any>('/assignments/my', { cacheTtlMs: 20_000 }),
 
   // Admin & Users
-  listUsers: (search = '') => request<any>(`/users?search=${encodeURIComponent(search)}`),
+  listUsers: (search = '', limit = 500) =>
+    request<any>(`/users?search=${encodeURIComponent(search)}&limit=${limit}`),
+  listAdminUsers: (search = '', limit = 500) =>
+    request<any>(`/admin/users?search=${encodeURIComponent(search)}&limit=${limit}`),
   createUser: (payload: any) =>
     request<any>('/users', { method: 'POST', body: JSON.stringify(payload) }),
-  updateUser: (id: number, payload: any) =>
-    request<any>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  updateUser: (
+    id: number,
+    payload: {
+      username?: string;
+      full_name?: string;
+      email?: string;
+      new_password?: string;
+      role?: 'admin' | 'teacher' | 'student';
+      roles?: Array<'admin' | 'teacher' | 'student'>;
+      is_active?: boolean;
+    }
+  ) => request<any>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteUser: (id: number) => request<any>(`/users/${id}`, { method: 'DELETE' }),
   getAdminStats: () => request<any>('/admin/stats', { cacheTtlMs: 20_000 }),
   getAdminSettings: () => request<any>('/admin/settings'),

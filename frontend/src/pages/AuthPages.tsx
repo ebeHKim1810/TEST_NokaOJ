@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { PasswordInput } from '../components/PasswordInput';
 import { api } from '../services/api';
 import { useApp } from '../stores/AppContext';
 
@@ -47,6 +48,7 @@ export const LoginPage: React.FC = () => {
             <input
               type="text"
               required
+              autoComplete="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="noka-input"
@@ -57,12 +59,12 @@ export const LoginPage: React.FC = () => {
             <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">
               Mật khẩu
             </label>
-            <input
-              type="password"
+            <PasswordInput
               required
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="noka-input"
+              placeholder="Nhập mật khẩu"
             />
           </div>
           <button type="submit" disabled={submitting} className="noka-btn-primary w-full">
@@ -86,6 +88,7 @@ export const RegisterPage: React.FC = () => {
   const { loginWithToken, toast, siteName, allowRegistration, refreshPublicConfig } = useApp();
   const navigate = useNavigate();
   const [form, setForm] = useState({ username: '', email: '', full_name: '', password: '' });
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
@@ -112,9 +115,24 @@ export const RegisterPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (form.password.length < 6) {
+      setError('Mật khẩu phải có ít nhất 6 ký tự.');
+      return;
+    }
+    if (form.password !== confirmPassword) {
+      setError('Mật khẩu xác nhận không khớp.');
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const res = await api.register(form);
+      const res = await api.register({
+        username: form.username.trim(),
+        email: form.email.trim(),
+        full_name: form.full_name.trim(),
+        password: form.password,
+      });
       loginWithToken(res.access_token, res.user);
       toast('Tạo tài khoản thành công.', 'success');
       navigate('/');
@@ -143,6 +161,7 @@ export const RegisterPage: React.FC = () => {
             <input
               required
               minLength={3}
+              autoComplete="username"
               value={form.username}
               onChange={(e) => setForm({ ...form, username: e.target.value })}
               className="noka-input"
@@ -163,6 +182,7 @@ export const RegisterPage: React.FC = () => {
             <input
               type="email"
               required
+              autoComplete="email"
               value={form.email}
               onChange={(e) => setForm({ ...form, email: e.target.value })}
               className="noka-input"
@@ -171,19 +191,36 @@ export const RegisterPage: React.FC = () => {
           </div>
           <div>
             <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">Mật khẩu (≥ 6 ký tự)</label>
-            <input
-              type="password"
+            <PasswordInput
               required
               minLength={6}
+              autoComplete="new-password"
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
-              className="noka-input"
+              placeholder="Tối thiểu 6 ký tự"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-1">Xác nhận mật khẩu</label>
+            <PasswordInput
+              required
+              minLength={6}
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Nhập lại mật khẩu"
             />
           </div>
           <button type="submit" disabled={submitting} className="noka-btn-primary w-full">
             {submitting ? 'Đang tạo...' : 'Tạo tài khoản'}
           </button>
         </form>
+        <p className="text-center text-xs text-zinc-500">
+          Đã có tài khoản?{' '}
+          <Link to="/login" className="text-[#2A5C99] dark:text-[#89B4E8] hover:underline">
+            Đăng nhập
+          </Link>
+        </p>
       </div>
     </div>
   );

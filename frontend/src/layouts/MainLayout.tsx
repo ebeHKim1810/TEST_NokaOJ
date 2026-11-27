@@ -8,6 +8,7 @@ import {
   Shield,
   Terminal,
   Trophy,
+  UserCog,
   Users,
   FileCode,
   Home,
@@ -15,10 +16,10 @@ import {
 import { useApp } from '../stores/AppContext';
 
 export const MainLayout: React.FC = () => {
-  const { siteName, allowRegistration, theme, toggleTheme, user, isStaff, logout } = useApp();
+  const { siteName, allowRegistration, theme, toggleTheme, user, isAdmin, isStaff, logout } = useApp();
 
   const navClass = ({ isActive }: { isActive: boolean }) =>
-    `inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
+    `inline-flex items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
       isActive
         ? 'bg-[#EBF3FC] text-[#2A5C99] dark:bg-[#89B4E8]/15 dark:text-[#A7C8F0]'
         : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800/70'
@@ -28,8 +29,8 @@ export const MainLayout: React.FC = () => {
     <div className="min-h-screen flex flex-col bg-white dark:bg-[#0E1013]">
       <header className="sticky top-0 z-30 h-13 border-b border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-[#0E1013]/95">
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-6">
-            <Link to="/" className="flex items-center gap-2 font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+          <div className="flex items-center gap-4 lg:gap-6">
+            <Link to="/" className="flex items-center gap-2 whitespace-nowrap font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
               <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#2A5C99] dark:bg-[#89B4E8] text-white dark:text-[#0E1013]">
                 <Terminal className="h-4 w-4" />
               </span>
@@ -58,9 +59,15 @@ export const MainLayout: React.FC = () => {
                 Lớp học
               </NavLink>
               {isStaff && (
-                <NavLink to="/admin" className={navClass}>
+                <NavLink to="/admin" end className={navClass}>
                   <Shield className="h-4 w-4" />
                   Quản trị
+                </NavLink>
+              )}
+              {isAdmin && (
+                <NavLink to="/admin/users" className={navClass}>
+                  <UserCog className="h-4 w-4" />
+                  Quản lý người dùng
                 </NavLink>
               )}
             </nav>

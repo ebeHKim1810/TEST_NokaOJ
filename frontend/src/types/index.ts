@@ -17,7 +17,9 @@ export interface User {
   email: string;
   full_name: string;
   roles: Role[];
+  role?: Role;
   is_active?: boolean;
+  created_at?: string;
   stats?: {
     solved_count: number;
     submission_count: number;

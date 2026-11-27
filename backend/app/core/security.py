@@ -33,6 +33,10 @@ def hash_password(password: str) -> str:
     return "scrypt$" + base64.b64encode(salt).decode("ascii") + "$" + base64.b64encode(dk).decode("ascii")
 
 
+# Alias matching standard FastAPI auth naming conventions
+get_password_hash = hash_password
+
+
 def verify_password(password: str, stored_hash: str) -> bool:
     if stored_hash.startswith("$argon2") and _argon2 is not None:
         try:
@@ -139,7 +143,7 @@ def load_user_by_id(db: Database, user_id: int) -> Optional[Dict[str, Any]]:
         "username": first["username"],
         "email": first["email"],
         "full_name": first["full_name"],
-        "is_active": first["is_active"],
+        "is_active": bool(first["is_active"]),
         "created_at": first["created_at"],
         "roles": roles,
     }
