@@ -1,10 +1,10 @@
-# Multi-stage build for Noka JUDGE Frontend
+# Multi-stage build for HKKD_Judge Frontend
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY frontend/package.json ./
 RUN npm install
 COPY frontend/ ./
-ARG VITE_APP_NAME="Noka JUDGE"
+ARG VITE_APP_NAME="HKKD_Judge"
 ARG VITE_API_BASE_URL="/api/v1"
 ENV VITE_APP_NAME=$VITE_APP_NAME
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL

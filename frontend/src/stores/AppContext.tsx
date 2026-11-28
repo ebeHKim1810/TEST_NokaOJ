@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { X } from 'lucide-react';
-import { BRAND_CONFIG } from '../config/brand';
+import { BRAND_CONFIG, resolveSiteName } from '../config/brand';
 import { api, getStoredToken, setStoredToken } from '../services/api';
 import { User } from '../types';
 
@@ -83,8 +83,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const cfg = await api.getPublicConfig();
       if (cfg.site_name) {
-        setSiteName(cfg.site_name);
-        document.title = cfg.site_name;
+        const resolvedSiteName = resolveSiteName(cfg.site_name);
+        setSiteName(resolvedSiteName);
+        document.title = resolvedSiteName;
       }
       if (typeof cfg.allow_registration === 'boolean') {
         setAllowRegistration(cfg.allow_registration);
