@@ -456,6 +456,326 @@ class TestVisibilityRetentionAndDelete(unittest.TestCase):
         self.assertFalse(self._storage_exists(f"submissions/sub_{s1_p2}.src"))
         self.assertEqual(len(self.db.fetchall("SELECT id FROM submissions")), 0)
 
+    def test_contest_override_for_hidden_and_private_problems(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        # Create a hidden problem and a private problem (NOT assigned to student1 or student2)
+        p_hid = self._create_problem("CON_HID", visibility="hidden")
+        p_priv = self._create_problem("CON_PRIV", visibility="private", allowed_user_ids=[])
+        p_pub = self._create_problem("CON_PUB", visibility="public")
+
+        now = datetime.now(timezone.utc)
+
+        # 1. Create an UPCOMING restricted contest (only student1 is allowed) containing hidden + private problems
+        r_con = self.client.post(
+            "/api/v1/contests",
+            headers=self._headers(self.admin_token),
+            json={
+                "title": "Restricted Contest Hidden/Private",
+                "start_time": (now + timedelta(hours=1)).isoformat(),
+                "end_time": (now + timedelta(hours=3)).isoformat(),
+                "block_old_code": False,
+                "problems": [
+                    {"problem_id": p_hid["id"], "label": "A", "points": 100},
+                    {"problem_id": p_priv["id"], "label": "B", "points": 100},
+                ],
+                "allowed_user_ids": [self.s1_id],
+            },
+        )
+        self.assertEqual(r_con.status_code, 201, r_con.text)
+        cid = r_con.json()["id"]
+
+        # Problemset MUST keep hidden and private problems hidden for both students
+        for tok in (self.s1_token, self.s2_token):
+            ps = self.client.get("/api/v1/problems", headers=self._headers(tok))
+            self.assertEqual({item["code"] for item in ps.json()["items"]}, {"CON_PUB"})
+
+        # Admin sees all 3 problems (and visibility field on contest detail)
+        admin_con = self.client.get(f"/api/v1/contests/{cid}", headers=self._headers(self.admin_token))
+        self.assertEqual(admin_con.status_code, 200)
+        self.assertEqual(
+            {p["code"]: p["visibility"] for p in admin_con.json()["problems"]},
+            {"CON_HID": "hidden", "CON_PRIV": "private"},
+        )
+
+        # BEFORE contest starts: student1 CANNOT see contest problem list, CANNOT view/run/submit hidden or private
+        s1_up = self.client.get(f"/api/v1/contests/{cid}", headers=self._headers(self.s1_token))
+        self.assertEqual(s1_up.status_code, 200)
+        self.assertEqual(s1_up.json()["problems"], [])
+        self.assertEqual(
+            self.client.get(
+                f"/api/v1/problems/{p_hid['code']}?contest_id={cid}",
+                headers=self._headers(self.s1_token),
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.get(
+                f"/api/v1/problems/{p_priv['code']}?contest_id={cid}",
+                headers=self._headers(self.s1_token),
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/submissions",
+                headers=self._headers(self.s1_token),
+                json={
+                    "problem_id": p_hid["id"],
+                    "contest_id": cid,
+                    "language": "python3",
+                    "source_code": "print(3)",
+                },
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/submissions/run-sample",
+                headers=self._headers(self.s1_token),
+                json={
+                    "problem_id": p_hid["id"],
+                    "contest_id": cid,
+                    "language": "python3",
+                    "source_code": "print(3)",
+                },
+            ).status_code,
+            404,
+        )
+
+        # 2. Start the contest (RUNNING window)
+        r_start = self.client.patch(
+            f"/api/v1/contests/{cid}",
+            headers=self._headers(self.admin_token),
+            json={
+                "start_time": (now - timedelta(minutes=10)).isoformat(),
+                "end_time": (now + timedelta(hours=2)).isoformat(),
+            },
+        )
+        self.assertEqual(r_start.status_code, 200, r_start.text)
+
+        # Problemset STILL hides CON_HID and CON_PRIV even while contest is RUNNING
+        ps_running = self.client.get("/api/v1/problems", headers=self._headers(self.s1_token))
+        self.assertEqual({item["code"] for item in ps_running.json()["items"]}, {"CON_PUB"})
+
+        # Allowed participant (student1) sees both problems on contest detail (without internal visibility leaked)
+        s1_run = self.client.get(f"/api/v1/contests/{cid}", headers=self._headers(self.s1_token))
+        self.assertEqual(s1_run.status_code, 200)
+        self.assertEqual([p["code"] for p in s1_run.json()["problems"]], ["CON_HID", "CON_PRIV"])
+        for p in s1_run.json()["problems"]:
+            self.assertNotIn("visibility", p)
+
+        # Allowed participant (student1) can GET full problem detail for both hidden and private (with or without contest_id)
+        for prob in (p_hid, p_priv):
+            r_det = self.client.get(
+                f"/api/v1/problems/{prob['code']}?contest_id={cid}",
+                headers=self._headers(self.s1_token),
+            )
+            self.assertEqual(r_det.status_code, 200, r_det.text)
+            self.assertEqual(r_det.json()["statement_md"], "Solve it.")
+            r_det_auto = self.client.get(
+                f"/api/v1/problems/{prob['code']}",
+                headers=self._headers(self.s1_token),
+            )
+            self.assertEqual(r_det_auto.status_code, 200, r_det_auto.text)
+
+        # Allowed participant can run sample on hidden & private contest problems
+        with patch("judge.worker.worker.JudgeEngine.run_sample", return_value={"verdict": "AC", "stdout": "3\n", "execution_time_ms": 5}):
+            for prob in (p_hid, p_priv):
+                r_rs = self.client.post(
+                    "/api/v1/submissions/run-sample",
+                    headers=self._headers(self.s1_token),
+                    json={
+                        "problem_id": prob["id"],
+                        "contest_id": cid,
+                        "language": "python3",
+                        "source_code": "print(3)",
+                    },
+                )
+                self.assertEqual(r_rs.status_code, 200, r_rs.text)
+
+        # Allowed participant can SUBMIT hidden & private problems (both with contest_id and via active contest auto-override)
+        outcome_hid = _FakeJudgeOutcome(
+            verdict="AC",
+            score=100,
+            max_score=100,
+            results=[_FakeTestResult(p_hid["tc_id"], "AC", 5, 256, 100, "OK")],
+        )
+        outcome_priv = _FakeJudgeOutcome(
+            verdict="AC",
+            score=100,
+            max_score=100,
+            results=[_FakeTestResult(p_priv["tc_id"], "AC", 5, 256, 100, "OK")],
+        )
+        with patch("judge.worker.worker.JudgeEngine.judge_submission", return_value=outcome_hid):
+            r_sub_hid = self.client.post(
+                "/api/v1/submissions",
+                headers=self._headers(self.s1_token),
+                json={
+                    "problem_id": p_hid["id"],
+                    "contest_id": cid,
+                    "language": "python3",
+                    "source_code": "print(3)",
+                },
+            )
+            self.assertEqual(r_sub_hid.status_code, 201, r_sub_hid.text)
+            sub_hid_id = r_sub_hid.json()["id"]
+
+        with patch("judge.worker.worker.JudgeEngine.judge_submission", return_value=outcome_priv):
+            r_sub_priv = self.client.post(
+                "/api/v1/submissions",
+                headers=self._headers(self.s1_token),
+                json={
+                    "problem_id": p_priv["id"],
+                    "contest_id": cid,
+                    "language": "python3",
+                    "source_code": "print(3)",
+                },
+            )
+            self.assertEqual(r_sub_priv.status_code, 201, r_sub_priv.text)
+            sub_priv_id = r_sub_priv.json()["id"]
+
+        # Student1 can view own submissions & details; scoreboard counts both AC problems
+        s1_subs = self.client.get("/api/v1/submissions", headers=self._headers(self.s1_token)).json()["items"]
+        self.assertTrue({sub_hid_id, sub_priv_id}.issubset({s["id"] for s in s1_subs}))
+        self.assertEqual(
+            self.client.get(f"/api/v1/submissions/{sub_hid_id}", headers=self._headers(self.s1_token)).status_code,
+            200,
+        )
+        sb = self.client.get(f"/api/v1/contests/{cid}/scoreboard", headers=self._headers(self.s1_token)).json()
+        self.assertEqual(sb["standings"][0]["username"], "student1")
+        self.assertEqual(sb["standings"][0]["solved"], 2)
+
+        # Outsider student2 is strictly blocked from restricted contest, its hidden/private problems, and cannot see student1's hidden/private submissions
+        self.assertEqual(
+            self.client.get(f"/api/v1/contests/{cid}", headers=self._headers(self.s2_token)).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.get(
+                f"/api/v1/problems/{p_hid['code']}?contest_id={cid}",
+                headers=self._headers(self.s2_token),
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.get(
+                f"/api/v1/problems/{p_priv['code']}?contest_id={cid}",
+                headers=self._headers(self.s2_token),
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/submissions",
+                headers=self._headers(self.s2_token),
+                json={
+                    "problem_id": p_hid["id"],
+                    "contest_id": cid,
+                    "language": "python3",
+                    "source_code": "print(3)",
+                },
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/submissions",
+                headers=self._headers(self.s2_token),
+                json={"problem_id": p_hid["id"], "language": "python3", "source_code": "print(3)"},
+            ).status_code,
+            404,
+        )
+        s2_subs = self.client.get("/api/v1/submissions", headers=self._headers(self.s2_token)).json()["items"]
+        self.assertEqual(s2_subs, [])
+
+        # 3. End the contest (ENDED window)
+        r_end = self.client.patch(
+            f"/api/v1/contests/{cid}",
+            headers=self._headers(self.admin_token),
+            json={
+                "start_time": (now - timedelta(hours=3)).isoformat(),
+                "end_time": (now - timedelta(minutes=5)).isoformat(),
+            },
+        )
+        self.assertEqual(r_end.status_code, 200, r_end.text)
+
+        # After contest ends: student1 can STILL review hidden & private statements via contest page
+        self.assertEqual(
+            self.client.get(
+                f"/api/v1/problems/{p_hid['code']}?contest_id={cid}",
+                headers=self._headers(self.s1_token),
+            ).status_code,
+            200,
+        )
+        # After contest ends: submitting with contest_id returns 403 (contest ended), and submitting without contest_id is blocked
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/submissions",
+                headers=self._headers(self.s1_token),
+                json={
+                    "problem_id": p_hid["id"],
+                    "contest_id": cid,
+                    "language": "python3",
+                    "source_code": "print(3)",
+                },
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/submissions",
+                headers=self._headers(self.s1_token),
+                json={"problem_id": p_hid["id"], "language": "python3", "source_code": "print(3)"},
+            ).status_code,
+            404,
+        )
+
+        # 4. Public (open) running contest grants hidden-problem access to any student while keeping Problemset clean
+        p_open_hid = self._create_problem("OPEN_HID", visibility="hidden")
+        r_open = self.client.post(
+            "/api/v1/contests",
+            headers=self._headers(self.admin_token),
+            json={
+                "title": "Public Open Contest",
+                "start_time": (now - timedelta(minutes=10)).isoformat(),
+                "end_time": (now + timedelta(hours=1)).isoformat(),
+                "problems": [{"problem_id": p_open_hid["id"], "label": "A", "points": 100}],
+            },
+        )
+        self.assertEqual(r_open.status_code, 201, r_open.text)
+        open_cid = r_open.json()["id"]
+
+        self.assertEqual(
+            self.client.get(
+                f"/api/v1/problems/{p_open_hid['code']}?contest_id={open_cid}",
+                headers=self._headers(self.s2_token),
+            ).status_code,
+            200,
+        )
+        outcome_open = _FakeJudgeOutcome(
+            verdict="AC",
+            score=100,
+            max_score=100,
+            results=[_FakeTestResult(p_open_hid["tc_id"], "AC", 5, 256, 100, "OK")],
+        )
+        with patch("judge.worker.worker.JudgeEngine.judge_submission", return_value=outcome_open):
+            r_open_sub = self.client.post(
+                "/api/v1/submissions",
+                headers=self._headers(self.s2_token),
+                json={
+                    "problem_id": p_open_hid["id"],
+                    "contest_id": open_cid,
+                    "language": "python3",
+                    "source_code": "print(3)",
+                },
+            )
+            self.assertEqual(r_open_sub.status_code, 201, r_open_sub.text)
+
+        # Problemset STILL never leaks OPEN_HID
+        ps_s2 = self.client.get("/api/v1/problems", headers=self._headers(self.s2_token)).json()["items"]
+        self.assertEqual({item["code"] for item in ps_s2}, {"CON_PUB"})
+
 
 if __name__ == "__main__":
     unittest.main()

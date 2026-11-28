@@ -221,7 +221,14 @@ export const SubmissionsPage: React.FC = () => {
                   </td>
                   <td className="font-medium">{s.username}</td>
                   <td>
-                    <Link to={`/problems/${s.problem_code}`} className="hover:underline">
+                    <Link
+                      to={
+                        s.contest_id
+                          ? `/problems/${s.problem_code}?contest_id=${s.contest_id}`
+                          : `/problems/${s.problem_code}`
+                      }
+                      className="hover:underline"
+                    >
                       <span className="font-mono text-xs text-zinc-500 mr-1.5">{s.problem_code}</span>
                       {s.problem_title}
                     </Link>
@@ -483,7 +490,18 @@ export const SubmissionDetailPage: React.FC = () => {
             <VerdictBadge verdict={sub.verdict} />
           </div>
           <p className="text-xs text-zinc-500 font-mono">
-            {sub.username} · {sub.problem_code} ({sub.problem_title}) · {sub.language} · {sub.score}/{sub.max_score} điểm · {sub.execution_time_ms} ms · {sub.memory_kb} KB
+            {sub.username} ·{' '}
+            <Link
+              to={
+                sub.contest_id
+                  ? `/problems/${sub.problem_code}?contest_id=${sub.contest_id}`
+                  : `/problems/${sub.problem_code}`
+              }
+              className="text-[#2A5C99] dark:text-[#89B4E8] hover:underline"
+            >
+              {sub.problem_code} ({sub.problem_title})
+            </Link>{' '}
+            · {sub.language} · {sub.score}/{sub.max_score} điểm · {sub.execution_time_ms} ms · {sub.memory_kb} KB
           </p>
         </div>
         <div className="flex items-center gap-2">

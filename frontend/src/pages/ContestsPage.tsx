@@ -13,7 +13,7 @@ import {
   Trophy,
   Unlock,
 } from 'lucide-react';
-import { api } from '../services/api';
+import { api, clearApiCache } from '../services/api';
 import { useApp } from '../stores/AppContext';
 import { ContestItem } from '../types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -468,6 +468,7 @@ export const ContestDetailPage: React.FC = () => {
         code: p.code,
         title: p.title,
         difficulty: p.difficulty,
+        visibility: p.visibility,
       }))
     );
     setShowEdit(true);
@@ -729,7 +730,10 @@ export const ContestDetailPage: React.FC = () => {
           isStaff={isStaff}
           isLoggedIn={Boolean(user)}
           onRegister={handleRegister}
-          onStarted={load}
+          onStarted={() => {
+            clearApiCache('/contests/');
+            load();
+          }}
         />
       )}
 
@@ -799,12 +803,25 @@ export const ContestDetailPage: React.FC = () => {
                   <tr key={p.id}>
                     <td className="font-mono font-semibold">{p.label}</td>
                     <td>
-                      <Link
-                        to={`/problems/${p.code}?contest_id=${contest.id}`}
-                        className="font-medium hover:text-[#2A5C99] dark:hover:text-[#89B4E8]"
-                      >
-                        {p.title}
-                      </Link>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Link
+                          to={`/problems/${p.code}?contest_id=${contest.id}`}
+                          onMouseEnter={() => api.prefetchProblem(p.code, contest.id)}
+                          className="font-medium hover:text-[#2A5C99] dark:hover:text-[#89B4E8]"
+                        >
+                          {p.title}
+                        </Link>
+                        {isStaff && p.visibility === 'hidden' && (
+                          <span className="rounded bg-zinc-200 dark:bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-zinc-600 dark:text-zinc-300">
+                            Ẩn
+                          </span>
+                        )}
+                        {isStaff && p.visibility === 'private' && (
+                          <span className="rounded bg-amber-100 dark:bg-amber-900/40 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:text-amber-300">
+                            Chỉ định
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="text-right font-mono text-xs">{p.points}</td>
                     <td className="text-right font-mono text-xs text-zinc-500">

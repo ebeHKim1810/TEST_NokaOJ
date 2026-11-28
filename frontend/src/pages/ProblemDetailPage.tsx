@@ -124,6 +124,7 @@ export const ProblemDetailPage: React.FC = () => {
         problem_id: problem.id,
         language,
         source_code: code,
+        ...(contestId ? { contest_id: contestId } : {}),
       });
       setSampleResult(res);
     } catch (err: any) {

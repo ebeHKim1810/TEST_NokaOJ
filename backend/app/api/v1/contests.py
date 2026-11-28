@@ -272,14 +272,17 @@ def get_contest(
     )
     problems = db.fetchall(
         """
-        SELECT cp.label, cp.points, p.id, p.code, p.title, p.difficulty, p.time_limit_ms, p.memory_limit_mb
+        SELECT cp.label, cp.points, p.id, p.code, p.title, p.difficulty, p.visibility, p.time_limit_ms, p.memory_limit_mb
         FROM contest_problems cp
         JOIN problems p ON p.id = cp.problem_id
-        WHERE cp.contest_id = %s
+        WHERE cp.contest_id = %s AND p.deleted_at IS NULL
         ORDER BY cp.order_index ASC, cp.label ASC
         """,
         (contest_id,),
     )
+    if not is_staff(current_user):
+        for p in problems:
+            p.pop("visibility", None)
     # Hide problem list before contest starts for non-staff
     c["problems"] = problems if (is_staff(current_user) or c["status"] != "UPCOMING") else []
     return c

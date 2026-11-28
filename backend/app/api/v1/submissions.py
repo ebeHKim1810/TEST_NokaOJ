@@ -51,7 +51,7 @@ def run_sample(
     )
     if not prob:
         raise HTTPException(status_code=404, detail="Problem not found.")
-    ensure_problem_access(db, prob, current_user)
+    ensure_problem_access(db, prob, current_user, contest_id=payload.contest_id)
 
     default_sample_in = prob.get("sample_input") or ""
     default_sample_out = prob.get("sample_output") or ""
@@ -104,9 +104,8 @@ def create_submission(
     )
     if not prob:
         raise HTTPException(status_code=404, detail="Problem not found.")
-    ensure_problem_access(db, prob, current_user, contest_id=payload.contest_id)
 
-    # Validate contest window & participation when submitting to a contest
+    # Validate contest access & window first when submitting inside a contest
     if payload.contest_id is not None:
         contest = db.fetchone(
             "SELECT * FROM contests WHERE id = %s AND deleted_at IS NULL", (payload.contest_id,)
@@ -114,28 +113,38 @@ def create_submission(
         if not contest:
             raise HTTPException(status_code=404, detail="Contest not found.")
         ensure_contest_access(db, contest, current_user)
-        in_contest = db.fetchone(
-            "SELECT 1 FROM contest_problems WHERE contest_id = %s AND problem_id = %s",
-            (payload.contest_id, payload.problem_id),
-        )
-        if not in_contest:
-            raise HTTPException(status_code=400, detail="Bài tập không thuộc kỳ thi này.")
         now = datetime.now(timezone.utc)
         if not is_staff(current_user):
             if now < _parse_iso(contest["start_time"]):
                 raise HTTPException(status_code=403, detail="Kỳ thi chưa bắt đầu.")
             if now > _parse_iso(contest["end_time"]):
                 raise HTTPException(status_code=403, detail="Kỳ thi đã kết thúc.")
-            reg = db.fetchone(
-                "SELECT 1 FROM contest_participants WHERE contest_id = %s AND user_id = %s",
+        in_contest = db.fetchone(
+            "SELECT 1 FROM contest_problems WHERE contest_id = %s AND problem_id = %s",
+            (payload.contest_id, payload.problem_id),
+        )
+        if not in_contest:
+            raise HTTPException(status_code=400, detail="Bài tập không thuộc kỳ thi này.")
+
+    ensure_problem_access(
+        db,
+        prob,
+        current_user,
+        contest_id=payload.contest_id,
+        require_running_contest=(payload.contest_id is None),
+    )
+
+    if payload.contest_id is not None and not is_staff(current_user):
+        reg = db.fetchone(
+            "SELECT 1 FROM contest_participants WHERE contest_id = %s AND user_id = %s",
+            (payload.contest_id, current_user["id"]),
+        )
+        if not reg:
+            # Auto-register allowed student so submitting directly from a contest problem records on scoreboard
+            db.execute(
+                "INSERT INTO contest_participants (contest_id, user_id) VALUES (%s, %s)",
                 (payload.contest_id, current_user["id"]),
             )
-            if not reg:
-                # Auto-register allowed student so submitting directly from a contest problem records on scoreboard
-                db.execute(
-                    "INSERT INTO contest_participants (contest_id, user_id) VALUES (%s, %s)",
-                    (payload.contest_id, current_user["id"]),
-                )
 
     src_bytes = payload.source_code.encode("utf-8")
     sub_id = db.insert_returning_id(
@@ -212,6 +221,25 @@ def list_submissions(
         params.extend(active_ids)
         where.append("s.user_id = %s")
         params.append(current_user["id"])
+    elif not is_staff(current_user):
+        # Never leak hidden/private contest problems from other users on the global submissions feed,
+        # while always letting students view their own submissions (including hidden/private contest problems).
+        if current_user:
+            where.append(
+                """
+                (
+                    s.user_id = %s
+                    OR p.visibility = 'public'
+                    OR (p.visibility = 'private' AND EXISTS (
+                        SELECT 1 FROM problem_allowed_users pau
+                        WHERE pau.problem_id = p.id AND pau.user_id = %s
+                    ))
+                )
+                """
+            )
+            params.extend([current_user["id"], current_user["id"]])
+        else:
+            where.append("p.visibility = 'public'")
 
     if username:
         where.append("u.username ILIKE %s")

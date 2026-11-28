@@ -107,7 +107,13 @@ def can_access_contest(db: Database, contest: Dict[str, Any], user: Optional[dic
         )
         return in_cls is not None
     if vis == "private":
-        return False
+        if not user:
+            return False
+        enrolled = db.fetchone(
+            "SELECT 1 FROM contest_participants WHERE contest_id = %s AND user_id = %s LIMIT 1",
+            (cid, int(user["id"])),
+        )
+        return enrolled is not None
     return True
 
 

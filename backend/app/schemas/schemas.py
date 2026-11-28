@@ -175,6 +175,7 @@ class RunSampleRequest(BaseModel):
     language: Literal["cpp17", "cpp20", "python3"]
     source_code: str = Field(..., min_length=1, max_length=200000)
     custom_input: Optional[str] = None
+    contest_id: Optional[int] = None
 
 
 # --- Contests ---
